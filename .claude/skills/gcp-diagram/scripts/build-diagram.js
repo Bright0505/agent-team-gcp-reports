@@ -326,6 +326,37 @@ function loadModel() {
     .sort(byName);
   const migInGke = new Set(gkes.flatMap((g) => g.migs.map((m) => m.name)));
 
+  // ── 未受管執行個體群組 ────────────────────────────────────────────
+  // 負載平衡器的後端很常是**未受管**群組（GKE 自建的 k8s-ig--*、人工建立的群組），
+  // 它們不在 `instance-groups managed list` 裡。少了它們，「後端服務 → 群組」這段鏈會斷掉，
+  // 而且是靜默斷掉（邊找不到目標就跳過）——正式環境對外 LB 的後端因此整個看不見。
+  // instance-groups-all.json 由 scan.sh 的 `compute instance-groups list` 產生；
+  // 舊的掃描資料沒有這個檔，此時退回「只有受管群組」，未解析的群組改畫佔位節點（見 UNRESOLVED_GROUPS）。
+  const allGroupsRaw = readJsonMaybe(DATA('compute', 'instance-groups-all.json'));
+  if (allGroupsRaw === null) {
+    GAPS.push('未受管執行個體群組（data/compute/instance-groups-all.json 不存在＝此份掃描資料早於該項目，請重跑掃描）');
+  }
+  const unmanaged = (allGroupsRaw || [])
+    .filter((g) => !migByName.has(g.name))
+    .map((g) => {
+      const zone = last(g.zone) || last(g.region);
+      return {
+        name: g.name,
+        zone,
+        region: last(g.region) || zoneToRegion(zone),
+        unmanaged: true,
+        size: Number(g.size || 0),
+        targetSize: Number(g.size || 0),
+        autoscaled: false,
+        // 未受管群組沒有 baseInstanceName，成員要靠 listInstances 才知道（本流程未掃），
+        // 因此成員一律留空——**不要用名稱前綴猜**，那會編造出不存在的關聯。
+        members: [],
+        network: last(g.network),
+      };
+    })
+    .sort(byName);
+  for (const g of unmanaged) migByName.set(g.name, g);
+
   // MIG 的網路歸屬原本靠成員 VM 推導，但**節點數為 0 的 MIG 沒有成員**，會推不出網路而掉出所有
   // VPC 之外（計數斷言首次實跑就抓到：6 個 MIG 只畫出 3 個）。GKE 擁有的 MIG 改用叢集的網路補上。
   for (const g of gkes) {
@@ -409,6 +440,33 @@ function loadModel() {
     })
     .sort(byName);
 
+  // ── 後端服務指向、但掃描資料裡查不到的群組 → 畫成佔位節點，不要靜默跳過 ──
+  // 「證明不了就不畫」講的是**關聯**；這裡群組被 backend-service 明白指名，存在本身是有證據的，
+  // 只是它的組態沒掃到。靜默跳過會讓流量鏈憑空斷在後端服務，讀圖的人只會以為「後面沒東西了」，
+  // 那比畫一個誠實標示「未掃描到」的節點更容易誤導。
+  const referencedGroups = uniq(bss.flatMap((b) => b.groups));
+  const unresolvedGroups = referencedGroups
+    .filter((n) => !migByName.has(n))
+    .map((n) => {
+      // 網路歸屬取自「指向這個群組的後端服務」所屬的轉送規則——轉送規則自己就帶 network，可證明
+      const fr = frs.find((f) => f.backendServices.some((b) => b.groups.includes(n)));
+      return {
+        name: n,
+        unresolved: true,
+        zone: null,
+        region: null,
+        size: 0,
+        targetSize: 0,
+        autoscaled: false,
+        members: [],
+        network: fr ? fr.network : null,
+      };
+    })
+    .sort(byName);
+  // 圖上「執行個體群組」一律指這三種的聯集；migs 單獨保留給 GKE 的 selfLink join 用
+  const groups = [...migs, ...unmanaged, ...unresolvedGroups];
+  for (const g of unresolvedGroups) migByName.set(g.name, g);
+
   // ---- Cloud SQL ----
   const sqls = sqlsRaw
     .map((db) => {
@@ -465,7 +523,10 @@ function loadModel() {
       };
       nv.subnets = subnets.filter((s) => s.network === n.name);
       nv.vms = vms.filter((v) => v.network === n.name);
+      // migs＝只有受管群組（GKE 的 selfLink join 與 MIG→VM 前綴推導都只對它成立）
+      // groups＝圖上要畫的全部群組（受管＋未受管＋後端服務指名但未掃到的佔位）
       nv.migs = migs.filter((m) => m.network === n.name);
+      nv.groups = groups.filter((m) => m.network === n.name);
       nv.gkes = gkes.filter((g) => g.network === n.name);
       nv.frs = frs.filter((f) => f.network === n.name);
       nv.sqls = sqls.filter((d) => d.network === n.name);
@@ -487,7 +548,7 @@ function loadModel() {
       if (nv.auto && nv.shownRegions.length === 0 && nv.regions.length) nv.shownRegions = [nv.regions[0]];
       nv.shownSubnets = nv.subnets.filter((s) => nv.shownRegions.includes(s.region));
       nv.hiddenSubnets = nv.subnets.filter((s) => !nv.shownRegions.includes(s.region));
-      nv.hasWorkload = nv.vms.length + nv.frs.length + nv.migs.length + nv.gkes.length + nv.sqls.length > 0;
+      nv.hasWorkload = nv.vms.length + nv.frs.length + nv.groups.length + nv.gkes.length + nv.sqls.length > 0;
       return nv;
     })
     .sort(byName);
@@ -528,6 +589,7 @@ function loadModel() {
     subnets,
     vms,
     migs,
+    groups,
     migInGke,
     gkes,
     frs,
@@ -853,6 +915,21 @@ function subnetLabel(s) {
 
 // 子網要不要標黃：沒有 Private Google Access 又沒有 Cloud NAT，代表這個子網裡沒有外部 IP 的 VM
 // 既連不出網際網路、也走不到 Google API——這是 GCP 上很常見、但只看單一檔案看不出來的組態問題。
+// 執行個體群組的標籤。三種來源要分清楚，混在一起讀圖的人會以為都掃到了：
+//   受管 MIG      → 有可用區與執行個體數
+//   未受管群組    → 有可用區，但成員要另外查 listInstances（本流程未掃），故不顯示成員數
+//   未掃描到      → 只被 backend-service 指名，組態完全沒有。**必須標示出來**，
+//                   否則流量鏈看起來接上了、實際上後端是誰仍然未知，比斷掉更誤導。
+function groupLabel(g) {
+  if (g.unresolved) {
+    return `${g.name}<br><font color="${GCP.yellow}">⚠ 未掃描到此群組</font>` +
+      `<br><font color="${GCP.grey}">僅由後端服務指名<br>組態不明</font>`;
+  }
+  const kind = g.unmanaged ? '<br>未受管群組' : '';
+  const size = g.unmanaged ? `<br>執行個體 ${g.size}` : `<br>執行個體 ${g.size}/${g.targetSize}`;
+  return `${g.name}<br>${g.zone || '?'}${size}${kind}${g.autoscaled ? '<br>自動調度' : ''}`;
+}
+
 const subnetWarn = (s) => s.purpose === 'PRIVATE' && !s.privateGoogleAccess && !s.nat;
 
 // ---------- 頁 1：全景架構 ----------
@@ -1042,11 +1119,12 @@ function buildSummary(model, sd) {
   }
 
   // ── 外部轉送規則 → 它的後端所在的資源列（可證明的 proxy→urlMap→backendService→group 鏈）──
+  // 雲外入口欄的外部轉送規則 → 它的後端服務（經 proxy → urlMap 的 selfLink 鏈證明）
   for (const f of extFrs) {
     for (const bs of f.backendServices) {
-      for (const grpName of bs.groups) {
-        const t = `sum-grp-${grpName}`;
-        if (pg.has(t)) pg.edge(`e-sum-${f.name}-${grpName}`, `sum-fr-${f.name}`, Page.key(t), `${bs.protocol}${bs.port ? ':' + bs.port : ''}`, H_FLOW);
+      if (pg.has(`sum-bs-${bs.name}`)) {
+        pg.edge(`e-sum-${f.name}-${bs.name}`, `sum-fr-${f.name}`, Page.key(`sum-bs-${bs.name}`),
+                `${bs.protocol}${bs.port ? ':' + bs.port : ''}`, H_FLOW);
       }
     }
   }
@@ -1075,16 +1153,11 @@ function planVpc(model, v) {
     rows.push(r);
   };
 
-  // 1. 外部負載平衡（有外部 IP，必然在外部通道）
-  addRow({
-    kind: 'extlb',
-    key: 'extlb',
-    title: '外部負載平衡（轉送規則 → 目標代理 → URL 對應 → 後端服務）',
-    channel: 'external',
-    items: v.frs.filter((f) => f.external),
-  });
+  // 外部轉送規則**不在這裡畫**：它已經在雲外入口欄畫過一次（那是它在圖上的位置——
+  // 網際網路的入口）。同一頁再畫一次會變成同一顆資源出現兩次，讀圖的人會以為有兩組 LB。
+  // 入口欄的節點直接連到下面的後端服務列，流量鏈一樣完整。
 
-  // 2. 後端服務（Cloud Armor／CDN／健康檢查的證據都掛在這裡）
+  // 1. 後端服務（Cloud Armor／CDN／健康檢查的證據都掛在這裡）
   const vpcBsNames = uniq(v.frs.flatMap((f) => f.bsNames));
   addRow({
     kind: 'bs',
@@ -1094,7 +1167,7 @@ function planVpc(model, v) {
     items: model.bss.filter((b) => vpcBsNames.includes(b.name)),
   });
 
-  // 3. 內部負載平衡與 Private Service Connect 端點
+  // 2. 內部負載平衡與 Private Service Connect 端點
   addRow({
     kind: 'intlb',
     key: 'intlb',
@@ -1103,7 +1176,7 @@ function planVpc(model, v) {
     items: v.frs.filter((f) => !f.external),
   });
 
-  // 4. GKE 叢集（節點 VM 收進叢集裡計數，不逐台畫——否則幾十顆節點會淹掉整張圖）
+  // 3. GKE 叢集（節點 VM 收進叢集裡計數，不逐台畫——否則幾十顆節點會淹掉整張圖）
   addRow({
     kind: 'gke',
     key: 'gke',
@@ -1112,18 +1185,18 @@ function planVpc(model, v) {
     items: v.gkes,
   });
 
-  // 5. 非 GKE 的受管執行個體群組
-  const plainMigs = v.migs.filter((m) => !model.migInGke.has(m.name));
+  // 4. 非 GKE 的執行個體群組
+  const plainGroups = v.groups.filter((m) => !model.migInGke.has(m.name));
   addRow({
     kind: 'mig',
     key: 'mig',
     title: '受管執行個體群組（MIG）',
-    channel: plainMigs.some((m) => m.members.some((x) => x.externalIPs.length)) ? 'external' : 'internal',
-    items: plainMigs,
+    channel: plainGroups.some((m) => m.members.some((x) => x.externalIPs.length)) ? 'external' : 'internal',
+    items: plainGroups,
   });
 
-  // 6. 獨立 VM（不屬於任何 MIG）——依「有沒有外部 IP」拆成兩列，各自進自己的通道
-  const inMig = new Set(v.migs.flatMap((m) => m.members.map((x) => x.name)));
+  // 5. 獨立 VM（不屬於任何 MIG）——依「有沒有外部 IP」拆成兩列，各自進自己的通道
+  const inMig = new Set(v.groups.flatMap((m) => m.members.map((x) => x.name)));
   const standalone = v.vms.filter((x) => !inMig.has(x.name));
   addRow({
     kind: 'vm',
@@ -1140,7 +1213,7 @@ function planVpc(model, v) {
     items: standalone.filter((x) => !x.externalIPs.length),
   });
 
-  // 7. Cloud SQL（有公開 IP 者放外部通道——那正是要一眼看見的事，不因「DB 理應在內部」而美化）
+  // 6. Cloud SQL（有公開 IP 者放外部通道——那正是要一眼看見的事，不因「DB 理應在內部」而美化）
   addRow({
     kind: 'sql',
     key: 'sql-ext',
@@ -1418,7 +1491,7 @@ function drawSummaryItem(pg, frame, row, item, ix, iy, sd) {
     sd.gke++;
     // 叢集的節點 VM／MIG 收進叢集裡計數（不逐個畫），但計數斷言必須照實涵蓋
     sd.vmAccounted += item.members.length;
-    sd.migAccounted += item.migs.length;
+    sd.groupAccounted += item.migs.length;
     void id;
     return;
   }
@@ -1426,14 +1499,14 @@ function drawSummaryItem(pg, frame, row, item, ix, iy, sd) {
     pg.vertex(
       `sum-grp-${item.name}`,
       frame,
-      `${item.name}<br>${item.zone}<br>執行個體 ${item.size}/${item.targetSize}${item.autoscaled ? '<br>自動調度' : ''}`,
+      groupLabel(item),
       STYLES.mig,
       ix,
       iy,
       S.icon,
       S.icon
     );
-    sd.mig++;
+    if (!item.unresolved) sd.group++;
     sd.vmAccounted += item.members.length;
     return;
   }
@@ -1510,7 +1583,7 @@ function buildOverview(model, drawn) {
     const parts = [`子網×${v.subnets.length}`];
     if (v.vms.length) parts.push(`VM×${v.vms.length}`);
     if (v.gkes.length) parts.push(`GKE×${v.gkes.length}`);
-    if (v.migs.length) parts.push(`MIG×${v.migs.length}`);
+    if (v.groups.length) parts.push(`執行個體群組×${v.groups.length}`);
     if (v.frs.length) parts.push(`轉送規則×${v.frs.length}`);
     if (v.sqls.length) parts.push(`Cloud SQL×${v.sqls.length}`);
     const exposedN = v.vms.filter((x) => x.exposed).length;
@@ -1533,7 +1606,7 @@ function buildOverview(model, drawn) {
       drawn.subnetAccounted += v.subnets.length;
       drawn.vmAccounted += v.vms.length;
       drawn.sqlAccounted += v.sqls.length;
-      drawn.migAccounted += v.migs.length;
+      drawn.groupAccounted += v.groups.filter((g) => !g.unresolved).length;
       drawn.gkeAccounted += v.gkes.length;
       drawn.forwardingRuleAccounted += v.frs.length;
     }
@@ -1587,7 +1660,7 @@ function buildVpcPage(model, v, drawn) {
   addBand({ key: 'proxy', title: '目標代理 ＋ URL 對應', color: GCP.blue, items: uniq(v.frs.map((f) => f.proxy).filter(Boolean)) });
   addBand({ key: 'bs', title: '後端服務', color: GCP.blue, items: vpcBss });
   addBand({ key: 'gke', title: 'GKE 叢集', color: GCP.green, items: v.gkes });
-  addBand({ key: 'mig', title: '執行個體群組（MIG）', color: GCP.grey, items: v.migs });
+  addBand({ key: 'mig', title: '執行個體群組（受管 MIG／未受管／未掃描到）', color: GCP.grey, items: v.groups });
   addBand({ key: 'vm', title: 'Compute Engine VM（⚠＝有外部 IP 且被 0.0.0.0/0 的 allow 規則套用）', color: GCP.grey, items: v.vms });
   addBand({ key: 'sql', title: 'Cloud SQL', color: GCP.yellow, items: v.sqls });
   addBand({ key: 'intfr', title: '內部轉送規則／Private Service Connect 端點', color: GCP.blue, items: v.frs.filter((f) => !f.external) });
@@ -1686,7 +1759,7 @@ function buildVpcPage(model, v, drawn) {
     for (const m of g.migs) pg.edge(`e-${v.name}-gke-${g.name}-${m.name}`, get('gke', g.name), get('mig', m.name), '', V_FLOW);
   }
   // 4. MIG → VM（baseInstanceName 前綴＝命名規則推導，非 selfLink，故虛線）
-  for (const m of v.migs) {
+  for (const m of v.groups) {
     for (const vm of m.members) {
       pg.edge(`e-${v.name}-mig-${m.name}-${vm.name}`, get('mig', m.name), get('vm', vm.name), '', V_FLOW + STYLES.edgeInferred);
     }
@@ -1839,7 +1912,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
       const id = pg.vertex(
         `mig-${item.name}`,
         bandCell,
-        `${item.name}<br>${item.zone}<br>執行個體 ${item.size}/${item.targetSize}${item.autoscaled ? '<br>自動調度' : ''}`,
+        groupLabel(item),
         STYLES.mig,
         ix,
         iy,
@@ -1847,7 +1920,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
         L.icon
       );
       put('mig', item.name, id);
-      drawn.mig++;
+      if (!item.unresolved) drawn.group++;
       return;
     }
     case 'vm': {
@@ -1880,8 +1953,8 @@ function main() {
     vmAccounted: 0,
     sql: 0,
     sqlAccounted: 0,
-    mig: 0,
-    migAccounted: 0,
+    group: 0,
+    groupAccounted: 0,
     gke: 0,
     gkeAccounted: 0,
     bucket: 0,
@@ -1907,14 +1980,14 @@ function main() {
     subnet: model.subnets.length,
     vm: model.vms.length,
     sql: model.sqls.length,
-    mig: model.migs.length,
+    group: model.groups.filter((g) => !g.unresolved).length,
     gke: model.gkes.length,
     bucket: model.buckets.length,
     forwardingRule: model.frs.length,
     backendService: model.bss.filter((b) => vpcBsNames.includes(b.name)).length,
   };
 
-  const KEYS = ['subnet', 'vm', 'sql', 'mig', 'gke', 'bucket', 'forwardingRule', 'backendService'];
+  const KEYS = ['subnet', 'vm', 'sql', 'group', 'gke', 'bucket', 'forwardingRule', 'backendService'];
   const problems = [];
   const check = (who, c) => {
     for (const k of KEYS) {
@@ -1937,7 +2010,7 @@ function main() {
   const rel = path.relative(WORK_ROOT, opts.out);
   const fmt = (c) =>
     `子網 ${c.subnet}＋${c.subnetAccounted}/${src.subnet}、VM ${c.vm}＋${c.vmAccounted}/${src.vm}、` +
-    `MIG ${c.mig}＋${c.migAccounted}/${src.mig}、GKE ${c.gke}＋${c.gkeAccounted}/${src.gke}、` +
+    `執行個體群組 ${c.group}＋${c.groupAccounted}/${src.group}、GKE ${c.gke}＋${c.gkeAccounted}/${src.gke}、` +
     `Cloud SQL ${c.sql}＋${c.sqlAccounted}/${src.sql}、轉送規則 ${c.forwardingRule}＋${c.forwardingRuleAccounted}/${src.forwardingRule}、` +
     `後端服務 ${c.backendService}/${src.backendService}、值區 ${c.bucket}/${src.bucket}`;
 

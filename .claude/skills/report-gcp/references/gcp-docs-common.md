@@ -1,7 +1,11 @@
 # Google Cloud 官方文件連結目錄
 
 五大支柱 agent 撰寫建議時的引用來源（背景說明與使用規則；連結本體依支柱拆在 `gcp-docs-<支柱>.md`）。
-**最後驗證：2026-07-21（90 個連結全數有效，以 `check-links.sh` 確定性檢查）**
+**最後驗證：2026-07-21（本目錄全部 6 個檔共 97 個唯一連結全數有效，以 `check-links.sh` 確定性檢查）**
+
+> 這個數字會隨著各支柱補連結而變動。**不要手動維護它**——要確認就重跑
+> `bash .claude/skills/report-gcp/scripts/check-links.sh .claude/skills/report-gcp/references/*.md`，
+> 以它的輸出為準（曾出現表頭寫 90、實際已是 97 的落差）。
 
 ## 為什麼有這個檔案
 

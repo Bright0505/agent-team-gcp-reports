@@ -39,7 +39,9 @@ CLAUDE.md 那三個「GCP 最容易誤判之處」，正是這張圖每一個版
 - 必要：`data/scan-meta.json`、`data/network/networks.json`、`data/network/subnets.json`、
   `data/network/firewall-rules.json`、`data/compute/instances.json`
   （後者缺檔時退回 `data/digest/compute-instances.json`）
-- 選配：`network/routers.json`、`network/addresses.json`、`compute/instance-groups.json`、
+- 選配：`network/routers.json`、`network/addresses.json`、
+  `compute/instance-groups.json`（受管）、`compute/instance-groups-all.json`（含未受管，
+  **負載平衡器的後端常是未受管群組，少了它流量鏈會斷**）、
   `compute/gke-clusters.json`、`compute/run-services.json`、`compute/functions.json`、
   `lb/{forwarding-rules,backend-services,url-maps,target-http(s)-proxies,security-policies}.json`、
   `db/sql-instances.json`、`storage/buckets.json`、
@@ -105,14 +107,25 @@ CLAUDE.md 那三個「GCP 最容易誤判之處」，正是這張圖每一個版
 |---|---|---|
 | 轉送規則 → 目標代理 → URL 對應 → 後端服務 | selfLink 逐段比對 | 實線 |
 | 後端服務 → 執行個體群組 | `backends[].group` 名稱比對 | 實線 |
+| 未掃描到的群組 | 被後端服務指名＝存在有證據，組態不明 | 節點標 **⚠ 未掃描到此群組** |
 | GKE → MIG | `cluster.instanceGroupUrls`（selfLink） | 實線 |
 | MIG → VM | `baseInstanceName` 前綴＝GCP 受管群組的**命名規則**，非 selfLink | **虛線** |
 | VM → Cloud SQL | `privateNetwork` == VM 網路，或 VM 外部 IP 落在 `authorizedNetworks` | 實線（標經由哪條路） |
 | 唯讀複本 → 主執行個體 | `masterInstanceName` | 實線 |
 | Cloud DNS → 負載平衡器 | **不畫** | — |
 
-最後一列是刻意的：`scan.sh` 只列出 managed-zones、**沒有 record set**，
+Cloud DNS 那一列是刻意的：`scan.sh` 只列出 managed-zones、**沒有 record set**，
 「這個網域指向哪個 LB」證明不了。寧可少畫一條邊，也不要畫一條猜的。
+
+**「證明不了就不畫」講的是關聯，不是節點。** 被 `backends[].group` 指名的執行個體群組，
+存在本身是有證據的（後端服務明白指向它），只是組態沒掃到——這種一律畫成標示
+「⚠ 未掃描到此群組」的節點。**靜默跳過會讓流量鏈憑空斷在後端服務，讀圖的人只會以為
+「後面沒東西了」，比畫一個誠實標示未知的節點更容易誤導**（實際踩過：7 個後端服務
+全部沒有往下的邊，正式環境對外 LB 的後端整段消失）。
+
+同理，執行個體群組有三種來源，標籤上要分清楚，不可混為一談：
+受管 MIG（有可用區與執行個體數）、未受管群組（有可用區，成員需另查 `listInstances`，本流程未掃）、
+未掃描到（只有名稱）。
 
 ### 警示標記（確定性規則，不讀 findings/）
 
