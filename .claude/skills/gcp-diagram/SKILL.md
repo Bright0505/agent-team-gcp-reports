@@ -136,7 +136,11 @@ Cloud DNS 那一列是刻意的：`scan.sh` 只列出 managed-zones、**沒有 r
 - 外部後端服務未掛 Cloud Armor → ⚠；存取記錄未開 → ⚠
 - HTTPS 目標代理未指定 SSL 政策 → ⚠
 - GKE 節點非私有／無主控授權網段 → ⚠
-- 子網既無 Private Google Access 也無 Cloud NAT 覆蓋 → 黃框 ⚠（該子網的無外部 IP VM 連不出去也走不到 Google API）
+- 子網缺 Private Google Access **或** 缺 Cloud NAT 覆蓋 → 黃框 ⚠，並標明缺的是哪條路徑。
+  **兩者管不同的事、不可互相替代**（官方：*"Traffic sent to Google APIs and services are routed
+  through Private Google Access even if the VM instance initiating the connections uses Public NAT."*）：
+  PGA 關 → 僅內部 IP 的 VM 到不了 Google API，**有 Cloud NAT 也救不了**；無 NAT → 連不出網際網路。
+  寫成「兩者皆無才示警」會把「有 NAT 但 PGA 關」這個常見組態標成沒問題，是相反的結論。
 - Cloud Storage 值區 PAP 非 `enforced`／UBLA 未啟用 → ⚠
 - 自動模式 VPC → 標題列 ⚠
 

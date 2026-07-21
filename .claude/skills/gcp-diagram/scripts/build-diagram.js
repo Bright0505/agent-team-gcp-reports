@@ -910,7 +910,9 @@ function subnetLabel(s) {
   flags.push(s.flowLogs ? '流量記錄開' : '流量記錄關');
   flags.push(s.nat ? `NAT ${s.nat}` : 'NAT 無');
   const purpose = s.purpose && s.purpose !== 'PRIVATE' ? `<br>${s.purpose}` : '';
-  return `${s.name}<br>${s.cidr}<br>${s.region}${purpose}<br><font color="${GCP.grey}">${flags.join('・')}</font>`;
+  const gaps = subnetGaps(s);
+  const warn = gaps.length ? `<br><font color="${GCP.yellow}">⚠ 僅內部 IP 的 VM ${gaps.join('、')}</font>` : '';
+  return `${s.name}<br>${s.cidr}<br>${s.region}${purpose}<br><font color="${GCP.grey}">${flags.join('・')}</font>${warn}`;
 }
 
 // 子網要不要標黃：沒有 Private Google Access 又沒有 Cloud NAT，代表這個子網裡沒有外部 IP 的 VM
@@ -930,7 +932,25 @@ function groupLabel(g) {
   return `${g.name}<br>${g.zone || '?'}${size}${kind}${g.autoscaled ? '<br>自動調度' : ''}`;
 }
 
-const subnetWarn = (s) => s.purpose === 'PRIVATE' && !s.privateGoogleAccess && !s.nat;
+// 子網的兩個對外能力缺口。
+// ⚠️ **Private Google Access 與 Cloud NAT 管的是兩件不同的事，不可互相替代。**
+//    官方原句（cloud.google.com/nat/docs/overview）：
+//      "Traffic sent to Google APIs and services are routed through Private Google Access
+//       even if the VM instance initiating the connections uses Public NAT."
+//    也就是說有 Cloud NAT **也救不了** PGA 關閉——去 Google API 的流量走的是 PGA 這條路。
+//    因此兩者是各自獨立的缺口，要分開示警：
+//      PGA 關       → 僅內部 IP 的 VM 到不了 Google API（Cloud Storage／Artifact Registry／Logging…）
+//      無 Cloud NAT → 僅內部 IP 的 VM 連不出網際網路
+//    先前寫成「兩者皆無才示警」是**錯的**：那會把「有 NAT 但 PGA 關」這個很常見的組態
+//    標示成沒問題，而它其實連 Google API 都到不了——結論相反。
+function subnetGaps(s) {
+  if (s.purpose !== 'PRIVATE') return []; // proxy-only／PSC 等特殊用途子網不放一般 VM
+  const gaps = [];
+  if (!s.privateGoogleAccess) gaps.push('到不了 Google API');
+  if (!s.nat) gaps.push('連不出網際網路');
+  return gaps;
+}
+const subnetWarn = (s) => subnetGaps(s).length > 0;
 
 // ---------- 頁 1：全景架構 ----------
 function buildSummary(model, sd) {
@@ -1289,7 +1309,8 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
     `sum-subblock-${v.name}`,
     frame,
     '子網（區域資源）　GCP 沒有公有／私有子網之分：子網不分層，下方通道分的是「資源有沒有外部 IP」<br>' +
-      `<font color="${GCP.grey}">PGA＝Private Google Access；「NAT 無」代表該子網內沒有外部 IP 的 VM 連不出網際網路</font>`,
+      `<font color="${GCP.grey}">PGA＝Private Google Access（到 Google API）；Cloud NAT（連出網際網路）。` +
+      `兩者管不同的事、<b>不可互相替代</b>——有 NAT 也救不了 PGA 關閉</font>`,
     STYLES.subnetBlock,
     extX,
     subY,
@@ -1780,7 +1801,7 @@ function buildVpcPage(model, v, drawn) {
   pg.vertex(
     `${v.name}-grid-label`,
     frame,
-    '子網（區域資源；GCP 沒有公有／私有子網之分。⚠＝既無 Private Google Access 也無 Cloud NAT）',
+    '子網（區域資源；GCP 沒有公有／私有子網之分。⚠＝PGA 或 Cloud NAT 缺一，僅內部 IP 的 VM 會少一條對外路徑）',
     STYLES.label,
     M,
     y,
