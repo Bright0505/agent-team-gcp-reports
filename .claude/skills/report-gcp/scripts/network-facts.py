@@ -252,6 +252,10 @@ def sql_reachability(out, sqls):
             verdict = "有公開 IP 但無授權網路（僅 Cloud SQL Proxy／IAM 可連）"
         else:
             verdict = "僅私有 IP"
+        # PITR 兩個欄位是**引擎相依**的（Cloud SQL Admin API 官方定義）：
+        #   binaryLogEnabled          → 官方註明 "(MySQL only)"，MySQL 的 PITR 靠二進位記錄
+        #   pointInTimeRecoveryEnabled → PostgreSQL／SQL Server 用這個
+        # 故以 or 涵蓋兩種引擎；只看其中一個會對另一種引擎報出相反的結論。
         out.append(
             f"| `{db.get('name')}` | {db.get('databaseVersion')} | "
             f"{('**' + pub_ips[0] + '**') if pub_ips else '無'} | "

@@ -295,13 +295,18 @@ fi
         loc="$(basename "$f" .json)"
         jq -r --arg loc "$loc" '.[]? |
           "| \($loc) | \(.recommenderSubtype // "?") | \((.description // "?") | gsub("\\|"; "/")) | " +
-          (if .primaryImpact.costProjection.cost.units then
-             ((.primaryImpact.costProjection.cost.units | tonumber | fabs | tostring) + " " + (.primaryImpact.costProjection.cost.currencyCode // ""))
+          (.primaryImpact.costProjection.cost as $c |
+           if ($c.units // $c.nanos) != null then
+             ((((($c.units // 0) | tonumber) + (($c.nanos // 0) / 1000000000)) | fabs | . * 100 | round / 100 | tostring)
+              + " " + ($c.currencyCode // ""))
            else "-" end) +
           " | \(.stateInfo.state // "?") |"' "$f" 2>/dev/null
       done
       echo ""
-      echo "> 節省金額取自 \`primaryImpact.costProjection.cost\`（原始值為負數＝省下的錢，此處取絕對值）；"
+      echo "> 節省金額取自 \`primaryImpact.costProjection.cost\`（原始值為負數＝省下的錢，此處取絕對值）。"
+      echo "> **金額由 \`units\` ＋ \`nanos\`/1e9 合併後四捨五入到小數兩位**——Money 型別把整數與小數"
+      echo "> 分成兩個欄位，只讀 \`units\` 會把小數整段丟掉（如 -11.612903226 印成 11），"
+      echo "> 金額不足 1 元時甚至整筆變成 0。"
       echo "> 期間為該 recommender 的預估週期（通常為月）。引用時對回 \`data/cost/recommender/\` 原始檔。"
     fi
   else
