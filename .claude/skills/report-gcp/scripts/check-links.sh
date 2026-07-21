@@ -10,7 +10,7 @@
 #
 # 判別方式（實測 cloud.google.com 的行為後訂定，勿憑印象改）：
 #   1. HTTP 狀態碼 >= 400            → 失效。cloud.google.com 對不存在的文件頁**會**正確回 404
-#      （這點與 docs.aws.amazon.com 不同，AWS 站的 404 仍回 200）。
+#      （不要假設文件站的 404 一定回 200 而改用其他判別方式）。
 #   2. <title> 含 404 / Page Not Found → 失效（保險層：狀態碼被 CDN 改寫時仍抓得到）。
 #   3. 本體 < MIN_BYTES               → 失效（只回到殼、沒有內容）。
 #   4. 內容中找不到文章主體標記（devsite-article / devsite-book-nav）→ 標為「可疑」而非失效：

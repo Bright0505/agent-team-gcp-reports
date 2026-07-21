@@ -177,7 +177,7 @@
       "本範例中專案識別碼已遮罩。"
     ],
     "gaps": [
-      "**實際成本明細**：GCP 無等同 Cost Explorer 的明細 API，需 BigQuery 帳單匯出；本次僅有預算設定與 Recommender 估算。",
+      "**實際成本明細**：GCP 無可直接查詢的成本明細 API，需 BigQuery 帳單匯出；本次僅有預算設定與 Recommender 估算。",
       "組織層設定（Security Command Center、組織政策繼承）需組織層權限，本次僅涵蓋單一專案。",
       "應用層追蹤與快取命中率未量測；指標觀察窗口為 14 天。"
     ]

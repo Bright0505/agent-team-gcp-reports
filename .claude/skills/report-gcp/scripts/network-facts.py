@@ -4,7 +4,7 @@
 由 scripts/digest.sh 呼叫，只讀本機 data/，不呼叫 GCP。
 
 為什麼要有這支：
-  這種「機械性的跨檔比對」不該交給 LLM 判斷——它會忘、會隨機。AWS 版專案就發生過：
+  這種「機械性的跨檔比對」不該交給 LLM 判斷——它會忘、會隨機。實際發生過：
   證據全都在 data/ 裡，但需要跨三個檔交叉比對，LLM 沒做這一步，把一項 [高] 發現降級成 [中]，
   還給出該環境根本做不到的修復建議。算成事實表之後，agent 讀到的直接是結論，沒有機會漏。
 
@@ -15,7 +15,7 @@ GCP 特有、最容易被誤判的三件事（本檔的三個區塊）：
      「規則存在」與「真的暴露」是兩回事，只看 firewall-rules.json 必然誤判。
   2. **VM 的實際對外路徑**：GCP 沒有「公有子網／私有子網」的概念。
      對外可及性取決於「VM 有沒有 external IP」，對外連出則取決於 Cloud NAT。
-     照搬 AWS 的公私子網心智模型會得到錯誤結論。
+     套用「公有子網／私有子網」的心智模型會得到錯誤結論。
   3. **Cloud SQL 的實際可及性**：public IP × authorizedNetworks × SSL 模式三者要一起看。
      只有 public IP 但授權網路為空 ≠ 對外開放；public IP ＋ 0.0.0.0/0 授權 ＝ 全網際網路可連。
 
@@ -167,7 +167,7 @@ def firewall_exposure(out, fw, vms):
 
 def vm_paths(out, vms, subnets, routers):
     out.append("\n## 2. VM 的實際對外路徑\n")
-    out.append("GCP **沒有**「公有子網／私有子網」的概念（照搬 AWS 心智模型會得到錯誤結論）：")
+    out.append("GCP **沒有**「公有子網／私有子網」的概念（套用該心智模型會得到錯誤結論）：")
     out.append("對外**可及性**看 VM 有沒有外部 IP；對外**連出**看該子網有沒有被 Cloud NAT 覆蓋；")
     out.append("存取 Google API 則看子網的 Private Google Access。\n")
 

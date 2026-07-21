@@ -297,7 +297,7 @@ function prepare(data) {
 
 // ---------- 遮罩防呆 ----------
 function maskGuard(html) {
-  // GCP 版的敏感識別碼樣式（AWS 的 AKIA／帳號 ID 規則不適用，已換掉）
+  // GCP 的敏感識別碼樣式
   const rules = [
     [/\b\d{12}\b/g, '疑似未遮罩的 GCP 專案編號（12 位數字）'],
     [/\bAIza[0-9A-Za-z_-]{35}\b/g, '疑似 Google API key'],

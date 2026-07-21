@@ -10,8 +10,7 @@ CLAUDE.md 規定「建議必須附 Google Cloud 官方文件連結」。若讓 a
 
 1. **浪費**：把整頁文件（單頁可達數萬字元）拉進 context 只為了確認連結能開，每個月重抓同樣的頁面。
 2. **沒防到呆**：目視判斷抓不準。`cloud.google.com` 對不存在的頁面雖然**會**正確回 HTTP 404
-   （這點比 `docs.aws.amazon.com` 好——AWS 站的失效頁仍回 200），但它也會對某些路徑回
-   「HTTP 200 的導向殼」，用 WebFetch 看起來像正常頁面。
+   ，但它也會對某些路徑回「HTTP 200 的導向殼」，用 WebFetch 看起來像正常頁面。
 
 因此改為：**連結由目錄檔提供（已驗證），有效性由 `.claude/skills/report-gcp/scripts/check-links.sh`
 確定性檢查**（不經過 LLM、不花 token）。

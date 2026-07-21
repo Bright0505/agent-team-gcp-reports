@@ -9,10 +9,10 @@
 #   期別＝一個「已結束的完整週期」（報告主體）；資源盤點與組態一律為當下快照，不受期別影響。
 #   期別來源優先序：PERIOD 環境變數 > 第二個位置參數 > 留空（上一個完整月）。
 #
-# 與 AWS 版的差異（刻意設計，勿「修正」回去）：
-#   1. GCP 的 `gcloud compute * list` 預設就跨全部區域／可用區列出，不需要 AWS 那種逐區偵測迴圈。
+# 兩個刻意的設計（勿「修正」回去）：
+#   1. GCP 的 `gcloud compute * list` 預設就跨全部區域／可用區列出，不需要逐區偵測迴圈。
 #      少數真的要指定 location 的服務（Cloud Run／Redis／KMS）才從已掃到的資源推導位置清單。
-#   2. 成本明細沒有等同 Cost Explorer 的 API（要靠 BigQuery 帳單匯出）。本腳本改抓
+#   2. 成本明細沒有可直接查詢的 API（要靠 BigQuery 帳單匯出）。本腳本改抓
 #      billing 設定＋budgets＋Recommender 建議，成本明細在報告中標為「資料缺口」。
 #
 # ⚠️ 變數後若緊貼全形字元（如 `${PROJECT}（`）**必須加大括號**：bash 會把全形字元當成
@@ -214,7 +214,7 @@ run "db/redis-instances"    redis instances list --region - "${P[@]}"
 
 echo "=== 儲存 ==="
 # GCS 一次呼叫就含 iamConfiguration（PAP／UBLA）／versioning／lifecycle／encryption，
-# 不需要 AWS S3 那種逐 bucket 五連查。
+# 不需要逐 bucket 分多次查詢。
 run "storage/buckets" storage buckets list "${P[@]}"
 
 echo "=== 維運與偵測 ==="
@@ -226,7 +226,7 @@ run "ops/uptime-checks"      monitoring uptime list-configs "${P[@]}"
 run "ops/kms-keyrings"       kms keyrings list --location global "${P[@]}"
 run "ops/dns-zones"          dns managed-zones list "${P[@]}"
 
-echo "=== 成本訊號（GCP 無等同 Cost Explorer 的明細 API）==="
+echo "=== 成本訊號（GCP 無可直接查詢的成本明細 API）==="
 run "cost/billing-info"    billing projects describe "$PROJECT"
 BILLING_ACCOUNT="$(jq -r '.billingAccountName // empty' "$DATA/cost/billing-info.json" 2>/dev/null | sed 's|^billingAccounts/||')"
 if [ -n "$BILLING_ACCOUNT" ]; then
