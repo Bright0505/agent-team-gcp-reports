@@ -1,0 +1,994 @@
+<title>{{meta.title}}</title>
+<style>
+/* ===== 主題 tokens（由 build-report.js 依 --theme 注入，預設 templates/themes/default.css）===== */
+{{&theme_css}}
+/* ===== 以下版型 CSS 為凍結內容，逐月不變；改動即代表改版 ===== */
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 0 24px 96px;
+    }
+
+    /* ---- header ---- */
+    header.top {
+        border-bottom: 1px solid var(--line);
+        background:
+            linear-gradient(180deg, var(--accent-wash) 0%, transparent 100%);
+    }
+
+    .top-inner {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 40px 24px 32px;
+    }
+
+    .eyebrow {
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+        color: var(--accent-ink);
+        margin: 0 0 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .eyebrow .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+    }
+
+    h1 {
+        font-size: clamp(28px, 4.5vw, 44px);
+        line-height: 1.08;
+        margin: 0 0 18px;
+        letter-spacing: -.02em;
+        font-weight: 800;
+        text-wrap: balance;
+    }
+
+    .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 28px;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--ink-2);
+        margin-top: 8px;
+    }
+
+    .meta b {
+        color: var(--ink);
+        font-weight: 600;
+    }
+
+    .lede {
+        margin: 22px 0 0;
+        font-size: 16.5px;
+        max-width: 68ch;
+        color: var(--ink-2);
+    }
+
+    .lede strong {
+        color: var(--ink);
+        font-weight: 650;
+    }
+
+    /* ---- section chrome ---- */
+    section {
+        margin-top: 52px;
+    }
+
+    .sec-head {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        margin-bottom: 20px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 10px;
+    }
+
+    .sec-num {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--accent-ink);
+        font-weight: 600;
+    }
+
+    .sec-head h2 {
+        font-size: 21px;
+        margin: 0;
+        letter-spacing: -.01em;
+        font-weight: 750;
+    }
+
+    /* ---- pillar scorecards ---- */
+    .cards {
+        display: grid;
+        /* 五支柱（Google Cloud Well-Architected Framework）；改支柱數時同步改此處與 build-report.js 的 PILLAR_DEFS */
+        grid-template-columns: repeat(5, 1fr);
+        gap: 12px;
+    }
+
+    .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 18px 18px 16px;
+        box-shadow: var(--shadow);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .card .name {
+        font-size: 14px;
+        font-weight: 650;
+        margin: 0 0 2px;
+    }
+
+    .card .en {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+    }
+
+    .score {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        margin: 14px 0 12px;
+    }
+
+    .score .n {
+        font-size: 40px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: -.03em;
+    }
+
+    .score .d {
+        font-family: var(--mono);
+        font-size: 14px;
+        color: var(--ink-3);
+    }
+
+    .pips {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 14px;
+    }
+
+    .pip {
+        height: 5px;
+        flex: 1;
+        border-radius: 3px;
+        background: var(--surface-2);
+    }
+
+    .pip.on {
+        background: var(--accent);
+    }
+
+    .mini {
+        display: flex;
+        gap: 5px;
+        font-family: var(--mono);
+        font-size: 11px;
+    }
+
+    .mini span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--ink-2);
+    }
+
+    .sq {
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        display: inline-block;
+    }
+
+    .sq.hi {
+        background: var(--hi);
+    }
+
+    .sq.mid {
+        background: var(--mid);
+    }
+
+    .sq.lo {
+        background: var(--lo);
+    }
+
+    /* ---- severity distribution chart ---- */
+    .chart {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 22px 24px;
+        box-shadow: var(--shadow);
+    }
+
+    .chart .legend {
+        display: flex;
+        gap: 18px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink-2);
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+
+    .chart .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .bar-row {
+        display: grid;
+        grid-template-columns: 96px 1fr 40px;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 12px;
+    }
+
+    .bar-row:last-child {
+        margin-bottom: 0;
+    }
+
+    .bar-label {
+        font-size: 13px;
+        font-weight: 600;
+        text-align: right;
+    }
+
+    .bar-track {
+        display: flex;
+        height: 26px;
+        border-radius: 5px;
+        overflow: hidden;
+        background: var(--surface-2);
+        gap: 2px;
+    }
+
+    .seg {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        font-weight: 600;
+        min-width: 2px;
+        transition: filter .15s;
+    }
+
+    .seg:hover {
+        filter: brightness(1.08);
+    }
+
+    .seg.hi {
+        background: var(--hi);
+    }
+
+    .seg.mid {
+        background: var(--mid);
+    }
+
+    .seg.lo {
+        background: var(--lo);
+    }
+
+    .bar-total {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ---- priority list ---- */
+    .prio {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .prio-item {
+        display: grid;
+        grid-template-columns: 30px 1fr auto;
+        gap: 14px;
+        align-items: start;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--hi);
+        border-radius: 8px;
+        padding: 15px 18px;
+        box-shadow: var(--shadow);
+    }
+
+    .prio-item .rank {
+        font-family: var(--mono);
+        font-size: 18px;
+        font-weight: 800;
+        color: var(--hi);
+        line-height: 1.3;
+    }
+
+    .prio-item .body strong {
+        font-size: 15px;
+    }
+
+    .prio-item .body p {
+        margin: 4px 0 0;
+        font-size: 13.5px;
+        color: var(--ink-2);
+    }
+
+    .prio-item .tags {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 160px;
+    }
+
+    .tag {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        padding: 2px 7px;
+        border-radius: 20px;
+        background: var(--surface-2);
+        color: var(--ink-2);
+        border: 1px solid var(--line);
+        white-space: nowrap;
+    }
+
+    /* ---- pillar detail (accordion) ---- */
+    details.pillar {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        margin-bottom: 12px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+    }
+
+    details.pillar>summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 16px 20px;
+        display: grid;
+        grid-template-columns: auto 1fr auto auto;
+        align-items: center;
+        gap: 16px;
+    }
+
+    details.pillar>summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .chev {
+        width: 16px;
+        height: 16px;
+        color: var(--ink-3);
+        transition: transform .2s;
+        flex-shrink: 0;
+    }
+
+    details[open] .chev {
+        transform: rotate(90deg);
+    }
+
+    .p-title {
+        font-size: 16px;
+        font-weight: 700;
+    }
+
+    .p-title small {
+        font-family: var(--mono);
+        font-weight: 400;
+        color: var(--ink-3);
+        font-size: 11px;
+        margin-left: 8px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+    }
+
+    .p-score {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--ink-2);
+        font-weight: 600;
+    }
+
+    .p-mini {
+        display: flex;
+        gap: 4px;
+    }
+
+    .p-count {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        color: #fff;
+        padding: 1px 7px;
+        border-radius: 20px;
+        min-width: 22px;
+        text-align: center;
+    }
+
+    .p-count.hi {
+        background: var(--hi);
+    }
+
+    .p-count.mid {
+        background: var(--mid);
+    }
+
+    .p-count.lo {
+        background: var(--lo);
+    }
+
+    .p-body {
+        padding: 4px 20px 20px;
+        border-top: 1px solid var(--line);
+    }
+
+    .p-summary {
+        font-size: 14px;
+        color: var(--ink-2);
+        margin: 16px 0 18px;
+        max-width: 72ch;
+    }
+
+    .finding {
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        gap: 12px;
+        align-items: start;
+        padding: 13px 0;
+        border-top: 1px solid var(--line);
+    }
+
+    .finding:first-of-type {
+        border-top: none;
+    }
+
+    .sev-chip {
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .05em;
+        padding: 3px 8px;
+        border-radius: 5px;
+        white-space: nowrap;
+        text-transform: uppercase;
+    }
+
+    .sev-chip.hi {
+        background: var(--hi-wash);
+        color: var(--hi);
+    }
+
+    .sev-chip.mid {
+        background: var(--mid-wash);
+        color: var(--mid);
+    }
+
+    .sev-chip.lo {
+        background: var(--lo-wash);
+        color: var(--lo);
+    }
+
+    .fid {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink-3);
+        font-weight: 600;
+        padding-top: 2px;
+    }
+
+    .ftext strong {
+        font-size: 14px;
+        font-weight: 650;
+        display: block;
+        margin-bottom: 2px;
+    }
+
+    .ftext p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--ink-2);
+    }
+
+    .ftext .rec {
+        color: var(--accent-ink);
+    }
+
+    .good-note {
+        margin-top: 18px;
+        padding: 14px 16px;
+        background: var(--accent-wash);
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--ink-2);
+    }
+
+    .good-note b {
+        color: var(--accent-ink);
+    }
+
+    /* ---- cost ---- */
+    .cost-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 16px;
+    }
+
+    .cost-hero {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 24px;
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+
+    .cost-hero .big {
+        font-size: 52px;
+        font-weight: 800;
+        letter-spacing: -.03em;
+        line-height: 1;
+        color: var(--good);
+    }
+
+    .cost-hero .big small {
+        font-size: 20px;
+        font-weight: 600;
+    }
+
+    .cost-hero .cap {
+        font-size: 14px;
+        color: var(--ink-2);
+        margin-top: 8px;
+    }
+
+    .cost-hero .sub {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink-3);
+        margin-top: 14px;
+    }
+
+    .cost-bars {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 20px 22px;
+        box-shadow: var(--shadow);
+    }
+
+    .cost-bars h4 {
+        margin: 0 0 16px;
+        font-size: 13px;
+        font-family: var(--mono);
+        text-transform: uppercase;
+        letter-spacing: .08em;
+        color: var(--ink-3);
+        font-weight: 600;
+    }
+
+    .cbar {
+        margin-bottom: 12px;
+    }
+
+    .cbar:last-child {
+        margin-bottom: 0;
+    }
+
+    .cbar .cb-top {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12.5px;
+        margin-bottom: 4px;
+    }
+
+    .cbar .cb-top .amt {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .cb-track {
+        height: 8px;
+        background: var(--surface-2);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
+    .cb-fill {
+        height: 100%;
+        background: var(--good);
+        border-radius: 4px;
+    }
+
+    /* ---- roadmap ---- */
+    .road {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+    }
+
+    .road-col {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 18px;
+        box-shadow: var(--shadow);
+    }
+
+    .road-col h4 {
+        margin: 0 0 4px;
+        font-size: 15px;
+        font-weight: 700;
+    }
+
+    .road-col .when {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-3);
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        margin-bottom: 14px;
+    }
+
+    .road-col.now {
+        border-top: 3px solid var(--hi);
+    }
+
+    .road-col.mid {
+        border-top: 3px solid var(--mid);
+    }
+
+    .road-col.later {
+        border-top: 3px solid var(--accent);
+    }
+
+    .road-col ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 11px;
+    }
+
+    .road-col li {
+        font-size: 13px;
+        color: var(--ink-2);
+        padding-left: 18px;
+        position: relative;
+    }
+
+    .road-col li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 8px;
+        width: 6px;
+        height: 6px;
+        border-radius: 2px;
+        background: var(--line-strong);
+    }
+
+    .road-col li b {
+        color: var(--ink);
+        font-weight: 600;
+    }
+
+    .road-col li code {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-3);
+    }
+
+    /* ---- notes / footer ---- */
+    .notes {
+        background: var(--surface-2);
+        border-radius: var(--r);
+        padding: 20px 24px;
+        font-size: 13px;
+        color: var(--ink-2);
+    }
+
+    .notes h4 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        color: var(--ink);
+    }
+
+    .notes ul {
+        margin: 0;
+        padding-left: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .footer {
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--ink-3);
+    }
+
+    .mask {
+        font-family: var(--mono);
+        background: var(--surface-2);
+        padding: 0 5px;
+        border-radius: 4px;
+        letter-spacing: .05em;
+    }
+
+    @media (max-width: 1040px) {
+        .cards {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+
+    @media (max-width: 820px) {
+        .cards {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .cost-grid,
+        .road {
+            grid-template-columns: 1fr;
+        }
+
+        details.pillar>summary {
+            grid-template-columns: auto 1fr auto;
+        }
+
+        .p-score {
+            display: none;
+        }
+    }
+
+    @media (max-width: 520px) {
+        .cards {
+            grid-template-columns: 1fr;
+        }
+
+        .bar-row {
+            grid-template-columns: 70px 1fr 34px;
+            gap: 8px;
+        }
+
+        .prio-item {
+            grid-template-columns: 26px 1fr;
+        }
+
+        .prio-item .tags {
+            display: none;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        * {
+            transition: none !important;
+        }
+    }
+</style>
+
+<header class="top">
+    <div class="top-inner">
+        <p class="eyebrow"><span class="dot"></span>{{meta.eyebrow}}</p>
+        <h1>{{meta.title}}</h1>
+        <div class="meta">
+            <span>專案 <b class="mask">{{meta.account}}</b></span>
+            <span>區域 <b>{{meta.regions_display}}</b></span>
+            <span>掃描 <b>{{meta.scan_date}}</b></span>
+            <span>方式 <b>唯讀掃描</b></span>
+        </div>
+        <p class="lede">{{&meta.lede_html}}</p>
+    </div>
+</header>
+
+<div class="wrap">
+
+    <!-- 1. Scorecard -->
+    <section>
+        <div class="sec-head"><span class="sec-num">01</span>
+            <h2>五大支柱評分</h2>
+        </div>
+        <div class="cards">
+{{#each pillars}}
+            <div class="card">
+                <p class="name">{{name}}</p><span class="en">{{en}}</span>
+                <div class="score"><span class="n">{{score}}</span><span class="d">/ 5</span></div>
+                <div class="pips">{{#each pips}}<i class="pip{{#if on}} on{{/if}}"></i>{{/each}}</div>
+                <div class="mini"><span><i class="sq hi"></i>{{high}}</span><span><i class="sq mid"></i>{{medium}}</span><span><i class="sq lo"></i>{{low}}</span></div>
+            </div>
+{{/each}}
+        </div>
+    </section>
+
+    <!-- 2. Severity distribution -->
+    <section>
+        <div class="sec-head"><span class="sec-num">02</span>
+            <h2>發現嚴重度分布</h2>
+        </div>
+        <div class="chart">
+            <div class="legend">
+                <span><i class="sq hi"></i>高風險　立即處理</span>
+                <span><i class="sq mid"></i>中風險　中期改善</span>
+                <span><i class="sq lo"></i>低風險　有餘裕時處理</span>
+            </div>
+{{#each pillars}}
+            <div class="bar-row">
+                <span class="bar-label">{{name}}</span>
+                <div class="bar-track">
+                    {{#if high}}<div class="seg hi" style="flex:{{high}}" title="高 {{high}} 項">{{high}}</div>{{/if}}{{#if medium}}<div class="seg mid" style="flex:{{medium}}" title="中 {{medium}} 項">{{medium}}</div>{{/if}}{{#if low}}<div class="seg lo" style="flex:{{low}}" title="低 {{low}} 項">{{low}}</div>{{/if}}
+                </div>
+                <span class="bar-total">{{total}}</span>
+            </div>
+{{/each}}
+            <div class="bar-row" style="margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">
+                <span class="bar-label" style="font-weight:700;">合計</span>
+                <div class="bar-track" style="background:transparent;">
+                    {{#if totals.high}}<div class="seg hi" style="flex:{{totals.high}}" title="高 {{totals.high}} 項">高 {{totals.high}}</div>{{/if}}{{#if totals.medium}}<div class="seg mid" style="flex:{{totals.medium}}" title="中 {{totals.medium}} 項">中 {{totals.medium}}</div>{{/if}}{{#if totals.low}}<div class="seg lo" style="flex:{{totals.low}}" title="低 {{totals.low}} 項">低 {{totals.low}}</div>{{/if}}
+                </div>
+                <span class="bar-total">{{totals.all}}</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. Top priorities -->
+    <section>
+        <div class="sec-head"><span class="sec-num">03</span>
+            <h2>最優先處理的五件事</h2>
+        </div>
+        <div class="prio">
+{{#each priorities}}
+            <div class="prio-item">
+                <span class="rank">{{@number}}</span>
+                <div class="body">
+                    <strong>{{title}}</strong>
+                    <p>{{desc}}</p>
+                </div>
+                <div class="tags">{{#each tags}}<span class="tag">{{.}}</span>{{/each}}</div>
+            </div>
+{{/each}}
+        </div>
+    </section>
+
+    <!-- 4. Pillar detail -->
+    <section>
+        <div class="sec-head"><span class="sec-num">04</span>
+            <h2>各支柱發現明細</h2>
+        </div>
+
+{{#each pillars}}
+        <details class="pillar"{{#if @first}} open{{/if}}>
+            <summary>
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M9 6l6 6-6 6" />
+                </svg>
+                <span class="p-title">{{name}} <small>{{en}}</small></span>
+                <span class="p-score">{{score}} / 5</span>
+                <span class="p-mini">{{#if high}}<span class="p-count hi">{{high}}</span>{{/if}}{{#if medium}}<span class="p-count mid">{{medium}}</span>{{/if}}{{#if low}}<span class="p-count lo">{{low}}</span>{{/if}}</span>
+            </summary>
+            <div class="p-body">
+                {{#if p_summary}}<p class="p-summary">{{p_summary}}</p>{{/if}}
+{{#each findings}}
+                <div class="finding"><span class="sev-chip {{sev_class}}">{{severity}}</span><span class="fid">{{id}}</span>
+                    <div class="ftext"><strong>{{title}}</strong>
+                        {{#if has_body}}<p>{{#if desc}}{{desc}}{{/if}}{{#if rec}}<span class="rec">建議：{{rec}}</span>{{/if}}</p>{{/if}}
+                    </div>
+                </div>
+{{/each}}
+                {{#if good_note}}<div class="good-note"><b>良好實務：</b>{{good_note}}</div>{{/if}}
+            </div>
+        </details>
+{{/each}}
+    </section>
+
+    <!-- 5. Cost -->
+    <section>
+        <div class="sec-head"><span class="sec-num">05</span>
+            <h2>成本節省概覽</h2>
+        </div>
+        <div class="cost-grid">
+            <div class="cost-hero">
+                <div class="big">{{cost.total_display}}<small>／月</small></div>
+                <p class="cap">{{&cost.cap_html}}</p>
+                <p class="sub">{{cost.sub}}</p>
+            </div>
+            <div class="cost-bars">
+                <h4>各項預估節省（每月）</h4>
+{{#each cost.items}}
+                <div class="cbar">
+                    <div class="cb-top"><span>{{label}}</span><span class="amt">{{amount_display}}</span></div>
+                    <div class="cb-track">
+                        <div class="cb-fill" style="width:{{pct}}%"></div>
+                    </div>
+                </div>
+{{/each}}
+            </div>
+        </div>
+    </section>
+
+    <!-- 6. Roadmap -->
+    <section>
+        <div class="sec-head"><span class="sec-num">06</span>
+            <h2>改善路線圖</h2>
+        </div>
+        <div class="road">
+{{#each roadmap}}
+            <div class="road-col {{cls}}">
+                <h4>{{title}}</h4>
+                <p class="when">{{when}}</p>
+                <ul>
+{{#each items_html}}
+                    <li>{{&.}}</li>
+{{/each}}
+                </ul>
+            </div>
+{{/each}}
+        </div>
+    </section>
+
+    <!-- notes -->
+    <section>
+        <div class="sec-head"><span class="sec-num">07</span>
+            <h2>掃描方法與資料缺口</h2>
+        </div>
+        <div class="notes">
+            <h4>掃描方法</h4>
+            <ul>
+{{#each method.items_html}}
+                <li>{{&.}}</li>
+{{/each}}
+            </ul>
+            <h4 style="margin-top:16px;">主要資料缺口</h4>
+            <ul>
+{{#each method.gaps_html}}
+                <li>{{&.}}</li>
+{{/each}}
+            </ul>
+        </div>
+        <div class="footer">
+            Google Cloud Well-Architected Framework · 安全性 · 可靠性 · 效能最佳化 · 成本最佳化 · 卓越運維　|　掃描 {{meta.scan_date}} · {{meta.regions_display}} · 唯讀
+        </div>
+    </section>
+
+</div>

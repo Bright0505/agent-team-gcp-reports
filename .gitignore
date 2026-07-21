@@ -1,0 +1,6 @@
+# 專案專屬產出目錄（data/ 掃描原始資料、findings/ 分析結果、report/ 報告、archive/ 各期存檔）
+# 含專案內部資訊，只留本機、不提交內容。改由各目錄內的 .gitignore 保留「空目錄結構」進版控
+# （clone 後目錄即存在），內容則全部忽略——見 data/、findings/、report/、archive/、tmp/ 的 .gitignore
+
+# macOS
+.DS_Store

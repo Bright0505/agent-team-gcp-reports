@@ -1,0 +1,185 @@
+{
+  "meta": {
+    "title": "GCP 架構基礎報告（範例）",
+    "eyebrow": "Google Cloud Well-Architected Framework · 基礎架構評估",
+    "account": "example-prod-●●●●",
+    "regions": ["asia-east1", "us-central1"],
+    "scan_date": "2026-07-09",
+    "lede": "這是一套以 **GKE + Cloud Load Balancing + Cloud SQL for PostgreSQL** 為主體的網站／API 架構。服務選型合理、跨區域基礎有到位，**但安全與維運的基本盤有明顯缺口**：正式資料庫具公開 IP 且授權全網、專案層仍有基本角色（editor）授予服務帳戶、無任何告警政策與記錄匯出。成本方面 Recommender 已標出約 **$210／月** 的閒置資源，多數清理一天內可完成。",
+    "_comment": "本檔為 build-report.js 的資料契約範例與版型設計基準，內容為虛構示意。逐月只換 report/report-data.json，不改模板。"
+  },
+  "pillars": [
+    {
+      "id": "security",
+      "score": 2,
+      "high": 4,
+      "medium": 5,
+      "low": 2,
+      "p_summary": "多項基礎安全控制缺失：資料庫對公網開放、服務帳戶權限過大、值區未啟用統一存取控制。以下列出高與中風險項（低風險 2 項詳見完整報告）。",
+      "findings": [
+        { "id": "SEC-01", "severity": "高", "title": "Cloud SQL 具公開 IP 且授權網路含 0.0.0.0/0", "desc": "digest/network-facts.md 判定為「全網際網路可連」，且 sslMode 未強制。", "rec": "移除 0.0.0.0/0 授權、改走 Private Service Connect 或 Cloud SQL Auth Proxy，並強制 SSL。" },
+        { "id": "SEC-02", "severity": "高", "title": "防火牆規則對 0.0.0.0/0 開放 tcp:22，且有 4 台具外部 IP 的 VM 套用", "desc": "規則無 targetTags＝套用到該網路全部 VM（見網路事實表的實際暴露面）。", "rec": "改用 IAP for TCP forwarding，移除公網 SSH 規則。" },
+        { "id": "SEC-03", "severity": "高", "title": "服務帳戶被授予專案層 roles/editor", "desc": "iam-policy.md 顯示 2 個服務帳戶掛基本角色。", "rec": "改用最小權限的預定義角色，並以 Recommender 的 IAM 建議收斂。" },
+        { "id": "SEC-04", "severity": "高", "title": "3 個 Cloud Storage 值區未啟用統一值區層級存取（UBLA）", "desc": "仍可用舊版 ACL 授權，且 PAP 為 inherited。", "rec": "啟用 UBLA 並將 publicAccessPrevention 設為 enforced。" },
+        { "id": "SEC-05", "severity": "中", "title": "VM 服務帳戶使用 cloud-platform 全域 scope", "rec": "改為最小 scope，權限以 IAM 角色控制。" },
+        { "id": "SEC-06", "severity": "中", "title": "外部負載平衡器未掛 Cloud Armor 安全政策", "desc": "backend-services 的 securityPolicy 為 null。", "rec": "建立 Cloud Armor 政策並套用基本 WAF 規則集。" },
+        { "id": "SEC-07", "severity": "中", "title": "服務帳戶存在使用者自管金鑰且逾 12 個月未輪替", "rec": "改用 Workload Identity Federation，刪除長期金鑰。" },
+        { "id": "SEC-08", "severity": "中", "title": "未設定任何組織政策限制（如禁止外部 IP）", "rec": "套用 constraints/compute.vmExternalIpAccess 等基準政策。" },
+        { "id": "SEC-09", "severity": "中", "title": "子網未啟用 VPC 流量記錄", "desc": "事件調查時無網路層證據。", "rec": "對正式子網啟用 Flow Logs（取樣率可調低以控成本）。" }
+      ],
+      "good_note": "Cloud SQL 靜態加密與自動備份已啟用、CMEK 用於主要資料值區、負載平衡器強制 HTTPS 並使用現代 SSL 政策、無 allUsers 專案層授權。"
+    },
+    {
+      "id": "reliability",
+      "score": 3,
+      "high": 1,
+      "medium": 3,
+      "low": 3,
+      "p_summary": "跨可用區基礎（區域型 MIG、Cloud SQL 高可用）已到位，但監控與備援驗證不足，故障偵測仰賴人工回報。",
+      "findings": [
+        { "id": "REL-01", "severity": "高", "title": "專案沒有任何 Cloud Monitoring 告警政策", "desc": "掃描回空清單＝確定未設定；故障只能等使用者回報。", "rec": "建立通知管道 ＋ 負載平衡器 5xx／Cloud SQL CPU／GKE 節點的最小告警組合。" },
+        { "id": "REL-02", "severity": "中", "title": "Cloud SQL 未啟用時間點還原（PITR）", "rec": "啟用 PITR 並定期演練還原。" },
+        { "id": "REL-03", "severity": "中", "title": "GKE 節點集區為單一可用區", "desc": "區域故障即全服務中斷。", "rec": "改為區域型叢集（多可用區節點集區）。" },
+        { "id": "REL-04", "severity": "中", "title": "Cloud Storage 值區未啟用版本控制", "rec": "對內容來源值區啟用版本控制並搭配生命週期規則。" },
+        { "id": "REL-05", "severity": "低", "title": "未設定任何 uptime check" },
+        { "id": "REL-06", "severity": "低", "title": "部分永久磁碟無快照排程" },
+        { "id": "REL-07", "severity": "低", "title": "後端服務逾時設定偏長（120 秒）", "desc": "拉長故障恢復時間。" }
+      ],
+      "good_note": "Cloud SQL 為 REGIONAL 高可用 ＋ 每日自動備份、受管執行個體群組具自動修復、負載平衡器健康檢查設定合理、跨兩個區域部署。"
+    },
+    {
+      "id": "performance",
+      "score": 3,
+      "high": 0,
+      "medium": 2,
+      "low": 2,
+      "p_summary": "無實測瓶頸，主要是配置調校空間：機型過度配置與 CDN 未啟用。",
+      "findings": [
+        { "id": "PERF-01", "severity": "中", "title": "Recommender 建議 3 台 VM 降規", "desc": "Google 依實際用量判定機型過大（見 digest/cost-signals.md）。", "rec": "依建議調整機型並觀察兩週。" },
+        { "id": "PERF-02", "severity": "中", "title": "後端服務未啟用 Cloud CDN", "desc": "backend-services 的 enableCDN 為 false，靜態內容全部回源。", "rec": "對靜態路徑啟用 Cloud CDN 並設定快取模式。" },
+        { "id": "PERF-03", "severity": "低", "title": "子網未啟用 Private Google Access", "desc": "無外部 IP 的 VM 需繞經 NAT 存取 Google API。" },
+        { "id": "PERF-04", "severity": "低", "title": "永久磁碟仍為 pd-standard", "desc": "可改用 pd-balanced 取得更好的 IOPS 性價比。" }
+      ],
+      "good_note": "負載平衡器為全球型 ＋ HTTP/2、GKE 已啟用叢集自動調度、Cloud SQL 使用 SSD 儲存、資源部署貼近使用者所在區域。"
+    },
+    {
+      "id": "cost",
+      "score": 2,
+      "high": 2,
+      "medium": 3,
+      "low": 1,
+      "p_summary": "Recommender 標出約 $210／月 的閒置資源，另有承諾使用折扣空間。**實際帳單明細為資料缺口**（未接 BigQuery 帳單匯出）。",
+      "findings": [
+        { "id": "COST-01", "severity": "高", "title": "6 顆未掛載的永久磁碟　·　約 $96／月", "desc": "Recommender 的 IdleResourceRecommender 判定閒置。", "rec": "確認無資料需求後建立快照並刪除。" },
+        { "id": "COST-02", "severity": "高", "title": "4 個未使用的靜態外部 IP　·　約 $29／月", "desc": "位址處於 RESERVED 未關聯狀態。", "rec": "釋出未使用位址。" },
+        { "id": "COST-03", "severity": "中", "title": "3 台 VM 機型過大　·　約 $62／月", "desc": "與 PERF-01 同項，兼具效能與成本效益。", "rec": "依 Recommender 建議降規。" },
+        { "id": "COST-04", "severity": "中", "title": "專案未設定任何預算告警", "desc": "budgets 回空清單＝確定未設定，成本超支時無自動通知。", "rec": "建立預算 ＋ 50/90/100% 門檻通知。" },
+        { "id": "COST-05", "severity": "中", "title": "穩定基載未購買承諾使用折扣　·　潛在 $40–60／月", "rec": "清理閒置資源後再評估一年期承諾。" },
+        { "id": "COST-06", "severity": "低", "title": "值區無生命週期規則，舊物件未降階" }
+      ],
+      "good_note": "已使用區域型持續磁碟而非過度配置的 SSD、GKE 啟用節點自動調度可隨負載縮減、無長期閒置的負載平衡器。"
+    },
+    {
+      "id": "operations",
+      "score": 2,
+      "high": 1,
+      "medium": 3,
+      "low": 2,
+      "p_summary": "記錄與告警的基礎設施尚未建立：無記錄匯出、無 SLO、資源標籤不一致，導致問題排查與成本歸屬都缺乏依據。",
+      "findings": [
+        { "id": "OPS-01", "severity": "高", "title": "未設定任何 Cloud Logging 匯出 sink", "desc": "記錄僅留在預設值區（預設保留 30 天），逾期即無法追查。", "rec": "建立匯出至 Cloud Storage／BigQuery 的 sink，並依稽核需求設定保留期。" },
+        { "id": "OPS-02", "severity": "中", "title": "未定義任何 SLO 或錯誤預算", "rec": "為關鍵服務定義可用性／延遲 SLO，作為告警與改善的依據。" },
+        { "id": "OPS-03", "severity": "中", "title": "資源標籤（labels）覆蓋率低且命名不一致", "desc": "無法依環境／擁有者做成本歸屬。", "rec": "訂定標籤規範並以組織政策強制。" },
+        { "id": "OPS-04", "severity": "中", "title": "多數資源以主控台手動建立，無基礎架構即程式碼", "desc": "組態漂移無從追蹤，重建環境依賴人工記憶。", "rec": "以 Terraform 收斂既有資源，新資源一律走 IaC。" },
+        { "id": "OPS-05", "severity": "低", "title": "未使用記錄型指標偵測應用層錯誤" },
+        { "id": "OPS-06", "severity": "低", "title": "部分服務帳戶無描述，用途不明" }
+      ],
+      "good_note": "GKE 已啟用受管記錄與監控、Cloud SQL 維護窗口有明確設定、專案命名符合環境區分慣例。"
+    }
+  ],
+  "priorities": [
+    {
+      "title": "關閉正式資料庫的公網暴露",
+      "desc": "正式 PostgreSQL 具公開 IP，且授權網路設為 0.0.0.0/0——任何人都能嘗試連線你的正式資料庫，且連線未強制加密。",
+      "tags": ["SEC-01", "約半天"]
+    },
+    {
+      "title": "移除公網 SSH 並改用 IAP",
+      "desc": "一條沒有目標標籤的防火牆規則，等於對整個網路的 4 台對外機器開放 22 port。",
+      "tags": ["SEC-02", "約半天"]
+    },
+    {
+      "title": "收斂服務帳戶的專案層 editor 權限",
+      "desc": "兩個服務帳戶握有近乎完整的專案寫入權限，一旦金鑰外洩即等同專案失守。",
+      "tags": ["SEC-03", "SEC-07", "約一天"]
+    },
+    {
+      "title": "建立基本告警與記錄匯出",
+      "desc": "專案目前零告警、零記錄匯出——故障只能等使用者回報，事後也查不到當時發生什麼事。",
+      "tags": ["REL-01", "OPS-01", "約一天"]
+    },
+    {
+      "title": "清理閒置資源",
+      "desc": "6 顆沒有掛載的磁碟加上 4 個沒在用的固定 IP，合計約 $125／月 白付，刪除即省。",
+      "tags": ["COST-01", "COST-02", "約半天"]
+    }
+  ],
+  "cost": {
+    "total_monthly": 187,
+    "cap": "Recommender 依實際用量標出的可節省項目；**實際帳單明細為資料缺口**（未接 BigQuery 帳單匯出）",
+    "sub": "另有承諾使用折扣空間 $40–60／月　·　多數清理 <1 天可完成",
+    "items": [
+      { "label": "未掛載的永久磁碟", "amount": 96 },
+      { "label": "VM 機型降規", "amount": 62 },
+      { "label": "未使用的靜態 IP", "amount": 29 }
+    ]
+  },
+  "roadmap": [
+    {
+      "title": "Quick Wins",
+      "when": "30 天內 · 多數 <1 天",
+      "items": [
+        "移除 Cloud SQL 的 **0.0.0.0/0 授權網路**並強制 SSL",
+        "移除公網 SSH 規則，改用 **IAP for TCP forwarding**",
+        "刪除**閒置磁碟與固定 IP**（立省 ~$125／月）",
+        "建立**預算告警**與 50/90/100% 門檻通知",
+        "建立最小**告警政策組合** ＋ 通知管道",
+        "值區啟用 **UBLA ＋ publicAccessPrevention: enforced**"
+      ]
+    },
+    {
+      "title": "中期",
+      "when": "1–3 個月",
+      "items": [
+        "服務帳戶**移除 roles/editor**，改最小權限角色",
+        "長期金鑰改為 **Workload Identity Federation**",
+        "外部負載平衡器掛 **Cloud Armor**",
+        "GKE 節點集區改為**區域型**（多可用區）",
+        "啟用 **Cloud CDN** 與 Private Google Access",
+        "建立 **Logging sink** 與保留政策"
+      ]
+    },
+    {
+      "title": "長期",
+      "when": "3 個月以上",
+      "items": [
+        "既有資源以 **Terraform** 收斂，新資源一律走 IaC",
+        "定義關鍵服務的 **SLO ／錯誤預算**",
+        "備份還原演練、明確 RTO／RPO、跨區域 DR",
+        "接上 **BigQuery 帳單匯出**，讓成本分析有實際明細"
+      ]
+    }
+  ],
+  "method": {
+    "items": [
+      "全程唯讀（僅 `list`／`describe`／`get-iam-policy` 類指令），未對專案做任何變更；證據存於本機 `data/`。",
+      "跨檔關聯（防火牆實際暴露面、VM 對外路徑、Cloud SQL 可及性）由 `network-facts.py` **確定性計算**，非 LLM 判斷。",
+      "本範例中專案識別碼已遮罩。"
+    ],
+    "gaps": [
+      "**實際成本明細**：GCP 無等同 Cost Explorer 的明細 API，需 BigQuery 帳單匯出；本次僅有預算設定與 Recommender 估算。",
+      "組織層設定（Security Command Center、組織政策繼承）需組織層權限，本次僅涵蓋單一專案。",
+      "應用層追蹤與快取命中率未量測；指標觀察窗口為 14 天。"
+    ]
+  }
+}
