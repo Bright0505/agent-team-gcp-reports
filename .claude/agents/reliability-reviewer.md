@@ -19,7 +19,7 @@ model: opus
    其餘檔案（instance-groups、gke-clusters、sql-detail、monitoring-policies、
    uptime-checks、snapshots 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/reliability.md`
-3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-rel.md` 取用**（該檔連結已驗證有效）。
+3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-rel.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
    **不要為了確認連結有效而 WebFetch**——連結有效性由流程階段⑤的 check-links.sh 統一確定性檢查，
    **你不必自跑**。只有該檔未涵蓋的主題才用 WebFetch；查完後把新連結補進 `gcp-docs-rel.md`。
 
@@ -28,7 +28,7 @@ model: opus
 下表是**官方文件明列的核心原則**，本支柱的「檢查重點」必須覆蓋它們。
 唯讀掃描評估不到的原則，**必須寫進報告的「掃描範圍外／資料缺口」段落並說明原因，不可靜默略過**
 ——略過會讓報告看起來覆蓋完整，實際上少了半個支柱，而讀者無從得知。
-出處：https://cloud.google.com/architecture/framework/reliability
+出處：https://docs.cloud.google.com/architecture/framework/reliability
 
 | 官方核心原則 | 本流程如何評估 |
 |---|---|

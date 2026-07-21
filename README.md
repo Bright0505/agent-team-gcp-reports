@@ -1,7 +1,7 @@
 # GCP 架構報告 Agent Team
 
 以 Claude Code 多 agent 協作，對實際 GCP 專案進行**全程唯讀**掃描，
-依 [Google Cloud Well-Architected Framework](https://cloud.google.com/architecture/framework) 五大支柱
+依 [Google Cloud Well-Architected Framework](https://docs.cloud.google.com/architecture/framework) 五大支柱
 （安全性、可靠性、效能最佳化、成本最佳化、卓越運維）產出繁體中文架構報告（Markdown + HTML）。
 
 ## 特色
@@ -18,7 +18,7 @@
 
 ## 前置條件
 
-- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)、`jq`、`python3`、[Node.js](https://nodejs.org/)
+- [Google Cloud CLI](https://docs.cloud.google.com/sdk/docs/install)、`jq`、`python3`、[Node.js](https://nodejs.org/)
 - 有效的 GCP 憑證（`gcloud auth list` 須有 ACTIVE 帳號）。**強烈建議使用唯讀身分**：
   專用服務帳戶只掛 `roles/viewer`、`roles/iam.securityReviewer`、`roles/recommender.viewer`、
   `roles/billing.viewer`——唯讀保證的強制層在 IAM，專案內的 deny 清單與 agent 規則只是輔助防線
