@@ -38,7 +38,11 @@ fi
 
 mkdir -p "$DEST"
 N=0
-for f in "report/GCP架構報告.md" "report/report-data.json" "report/gcp-report.html"; do
+# gcp-architecture.drawio 是選配的 gcp-diagram skill 的產物，不一定存在——
+# `[ -f ]` 守衛讓它沒跑時自動跳過。存它的理由與存報告相同：架構圖逐期 diff 就是拓撲變化，
+# 那正是跨期回歸比對最直接的證據，留在 report/ 會被下一輪覆蓋掉。
+for f in "report/GCP架構報告.md" "report/report-data.json" "report/gcp-report.html" \
+         "report/gcp-architecture.drawio"; do
   [ -f "$f" ] && { cp "$f" "$DEST/"; N=$((N + 1)); }
 done
 mkdir -p "$DEST/findings"
