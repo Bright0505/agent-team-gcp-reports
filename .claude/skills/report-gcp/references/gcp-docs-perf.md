@@ -10,13 +10,13 @@ performance-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 - [Machine families resource and comparison guide](https://docs.cloud.google.com/compute/docs/machine-resource)
 - [Apply machine type recommendations](https://docs.cloud.google.com/compute/docs/instances/apply-machine-type-recommendations-for-instances)
-- [About Tau/Arm (Axion) machine series](https://docs.cloud.google.com/compute/docs/general-purpose-machines)
+- [General-purpose machine family for Compute Engine](https://docs.cloud.google.com/compute/docs/general-purpose-machines)
 - [GKE cluster autoscaler](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler)
 
 ## 儲存效能
 
-- [About persistent disk and Hyperdisk](https://docs.cloud.google.com/compute/docs/disks)
-- [Storage options comparison](https://docs.cloud.google.com/compute/docs/disks/performance)
+- [Choose a disk type](https://docs.cloud.google.com/compute/docs/disks)
+- [Persistent Disk performance overview](https://docs.cloud.google.com/compute/docs/disks/performance)
 
 ## 網路與快取
 

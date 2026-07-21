@@ -21,7 +21,11 @@ CLAUDE.md 規定「建議必須附 Google Cloud 官方文件連結」。若讓 a
 
 ## 網域：一律用 `docs.cloud.google.com`
 
-**新增連結時請用 `https://docs.cloud.google.com/...`，不要用 `https://cloud.google.com/...`。**
+**新增連結時網域一律用 `docs.cloud.google.com`，不要用舊的 `cloud.google.com`。**
+
+> 註：本檔（及任何會被 `check-links.sh` 掃到的檔案）**不要寫出帶 `https://` 的範例網址**——
+> 抽取器是用正規表示式撈 URL 的，會把 `.../...` 這種佔位符當成真連結去連，然後回報失效，
+> 讓流程階段 ⑤ 整個失敗。要舉例就只寫網域或路徑本身，不加通訊協定前綴。
 
 Google 正在把文件站搬到 `docs.cloud.google.com`，`cloud.google.com` 已開始降級：
 多數路徑兩邊仍回一模一樣的內容（實測位元組數完全相同），但**部分路徑在舊網域只回一個

@@ -9,7 +9,7 @@ ops-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 ## 記錄
 
-- [Configure and manage sinks](https://docs.cloud.google.com/logging/docs/export/configure_export_v2)
+- [Route logs to supported destinations](https://docs.cloud.google.com/logging/docs/export/configure_export_v2)
 - [Configure log buckets and retention](https://docs.cloud.google.com/logging/docs/buckets)
 - [Logs-based metrics](https://docs.cloud.google.com/logging/docs/logs-based-metrics)
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)
@@ -26,7 +26,7 @@ ops-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 - [Best practices for using Terraform](https://docs.cloud.google.com/docs/terraform/best-practices-for-terraform)
 - [Infrastructure Manager overview](https://docs.cloud.google.com/infrastructure-manager/docs/overview)
-- [Creating and managing labels](https://docs.cloud.google.com/resource-manager/docs/creating-managing-labels)
+- [Create and update labels for projects](https://docs.cloud.google.com/resource-manager/docs/creating-managing-labels)
 - [Organization policy constraints](https://docs.cloud.google.com/resource-manager/docs/organization-policy/overview)
 
 ## 變更與維護

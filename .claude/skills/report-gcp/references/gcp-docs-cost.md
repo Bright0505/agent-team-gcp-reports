@@ -13,12 +13,12 @@ cost-optimizer 專用。使用規則見 `gcp-docs-common.md`。
 - [Create, edit, or delete budgets and budget alerts](https://docs.cloud.google.com/billing/docs/how-to/budgets)
 - [Export Cloud Billing data to BigQuery](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery)
 - [Cloud Billing reports](https://docs.cloud.google.com/billing/docs/how-to/reports)
-- [Creating and managing labels](https://docs.cloud.google.com/resource-manager/docs/creating-managing-labels)
+- [Create and update labels for projects](https://docs.cloud.google.com/resource-manager/docs/creating-managing-labels)
 
 ## Recommender（閒置與規格建議）
 
 - [Recommenders overview](https://docs.cloud.google.com/recommender/docs/recommenders)
-- [Idle resource recommendations](https://docs.cloud.google.com/recommender/docs/unattended-project-recommender)
+- [Recommenders（含閒置資源建議）](https://docs.cloud.google.com/recommender/docs/recommenders)
 - [Apply machine type recommendations](https://docs.cloud.google.com/compute/docs/instances/apply-machine-type-recommendations-for-instances)
 
 ## 折扣方案

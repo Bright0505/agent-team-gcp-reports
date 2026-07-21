@@ -18,12 +18,12 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 ## 運算韌性
 
-- [Regional GKE clusters](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/types-of-clusters)
-- [Autohealing instances in MIGs](https://docs.cloud.google.com/compute/docs/instance-groups/autohealing-instances-in-migs)
-- [Regional managed instance groups](https://docs.cloud.google.com/compute/docs/instance-groups/distributing-instances-with-regional-instance-groups)
+- [About cluster configuration choices（區域型 vs 單一可用區）](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/types-of-clusters)
+- [Set up an application-based health check and autohealing](https://docs.cloud.google.com/compute/docs/instance-groups/autohealing-instances-in-migs)
+- [Create a MIG with VMs in multiple zones in a region](https://docs.cloud.google.com/compute/docs/instance-groups/distributing-instances-with-regional-instance-groups)
 - [GKE cluster autoscaler](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler)
 - [GKE maintenance windows and exclusions](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/maintenance-windows-and-exclusions)
-- [Unmanaged instance groups](https://docs.cloud.google.com/compute/docs/instance-groups/creating-groups-of-unmanaged-instances)
+- [Group unmanaged VMs together](https://docs.cloud.google.com/compute/docs/instance-groups/creating-groups-of-unmanaged-instances)
 
 ## 網路韌性
 
@@ -34,8 +34,8 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 ## 儲存與備份
 
 - [Object Versioning](https://docs.cloud.google.com/storage/docs/object-versioning)
-- [Scheduled snapshots for persistent disks](https://docs.cloud.google.com/compute/docs/disks/scheduled-snapshots)
-- [Backup and DR Service overview](https://docs.cloud.google.com/backup-disaster-recovery/docs/concepts/backup-dr)
+- [Create schedules for disk snapshots](https://docs.cloud.google.com/compute/docs/disks/scheduled-snapshots)
+- [Backup and DR Service — Product overview](https://docs.cloud.google.com/backup-disaster-recovery/docs/concepts/backup-dr)
 
 ## 負載平衡與健康檢查
 
