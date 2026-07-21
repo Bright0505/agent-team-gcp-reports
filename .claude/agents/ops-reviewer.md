@@ -29,6 +29,21 @@ model: sonnet
    **不要為了確認連結有效而 WebFetch**——連結有效性由流程階段⑤的 check-links.sh 統一確定性檢查，
    **你不必自跑**。只有該檔未涵蓋的主題才用 WebFetch；查完後把新連結補進 `gcp-docs-ops.md`。
 
+## 本支柱的官方核心原則（Google Cloud Well-Architected Framework）
+
+下表是**官方文件明列的核心原則**，本支柱的「檢查重點」必須覆蓋它們。
+唯讀掃描評估不到的原則，**必須寫進報告的「掃描範圍外／資料缺口」段落並說明原因，不可靜默略過**
+——略過會讓報告看起來覆蓋完整，實際上少了半個支柱，而讀者無從得知。
+出處：https://cloud.google.com/architecture/framework/operational-excellence
+
+| 官方核心原則 | 本流程如何評估 |
+|---|---|
+| Ensure operational readiness and performance using CloudOps | 記錄匯出 sink、監控告警、SLO 定義、uptime check 覆蓋範圍 |
+| Manage incidents and problems | 告警是否有通知管道（無通知＝等於沒有告警）。**事件處理流程本身掃描範圍外** |
+| Manage and optimize cloud resources | 標籤治理與命名一致性、閒置資源（與 COST 支柱協調，避免重複計分） |
+| Automate and manage change | IaC 跡象、GKE 發布通道與自動升級、Cloud SQL 維護窗口 |
+| Continuously improve and innovate | **屬流程面，唯讀掃描評估不到**，列入掃描範圍外 |
+
 ## 檢查重點（依掃描資料逐項核對）
 
 **可觀測性**

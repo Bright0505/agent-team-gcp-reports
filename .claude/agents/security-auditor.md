@@ -26,6 +26,23 @@ model: opus
    **你不必自跑**。只有該檔未涵蓋、且你需要確認文件內容確實支持某項建議時，才用 WebFetch；
    查完後把新連結補進 `gcp-docs-sec.md` 對應段落，供後續月份重複使用。
 
+## 本支柱的官方核心原則（Google Cloud Well-Architected Framework）
+
+下表是**官方文件明列的核心原則**，本支柱的「檢查重點」必須覆蓋它們。
+唯讀掃描評估不到的原則，**必須寫進報告的「掃描範圍外／資料缺口」段落並說明原因，不可靜默略過**
+——略過會讓報告看起來覆蓋完整，實際上少了半個支柱，而讀者無從得知。
+出處：https://cloud.google.com/architecture/framework/security
+
+| 官方核心原則 | 本流程如何評估 |
+|---|---|
+| Implement security by design | 由組態證據間接評估：防火牆的實際暴露面、IAM 最小權限、加密與 SSL 設定 |
+| Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 授權網路。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
+| Implement shift-left security | 屬 CI/CD 流程面，**唯讀掃描評估不到**，列入掃描範圍外 |
+| Implement preemptive cyber defense | Cloud Armor 安全政策、組織政策。**Security Command Center 需組織層權限，屬掃描範圍外** |
+| Use AI securely and responsibly | 專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
+| Use AI for security | 同上，明寫不適用或未採用 |
+| Meet regulatory, compliance, and privacy needs | 可查：稽核記錄、資料所在區域、CMEK。**法遵要求本身需業務輸入，屬掃描範圍外** |
+
 ## 檢查重點（依掃描資料逐項核對）
 
 **身分與存取（IAM）**
@@ -42,6 +59,11 @@ model: opus
 - VPC 流量記錄（Flow Logs）、防火牆規則記錄是否開啟
 - 外部負載平衡器是否掛 Cloud Armor（`digest/backend-services.json` 的 `securityPolicy`）
 - 是否有組織政策限制外部 IP、服務帳戶金鑰建立等
+- **Identity-Aware Proxy（IAP）是否啟用**（`digest/backend-services.json` 的 `iap`）——
+  這是官方零信任原則的核心控制項。對外服務僅靠防火牆／授權網路而未經 IAP 做身分驗證時，
+  等同「網路位置即信任」，正是零信任要淘汰的模型
+- **VPC Service Controls**：本流程掃描不到（需組織層 access-context-manager 權限），
+  **必須列入「掃描範圍外」照實說明，不可因為查不到就當作沒問題**
 
 **資料保護**
 - Cloud Storage：`publicAccessPrevention` 是否 `enforced`、UBLA 是否啟用、有無 CMEK

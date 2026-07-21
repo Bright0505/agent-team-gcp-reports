@@ -38,6 +38,20 @@ model: sonnet
    例外：**金額估算需要當下單價時，仍應 WebFetch 定價頁**（價格會變動，不可沿用舊值）；
    該檔未涵蓋的主題亦然，查完後把新連結補進 `gcp-docs-cost.md` 對應段落。
 
+## 本支柱的官方核心原則（Google Cloud Well-Architected Framework）
+
+下表是**官方文件明列的核心原則**，本支柱的「檢查重點」必須覆蓋它們。
+唯讀掃描評估不到的原則，**必須寫進報告的「掃描範圍外／資料缺口」段落並說明原因，不可靜默略過**
+——略過會讓報告看起來覆蓋完整，實際上少了半個支柱，而讀者無從得知。
+出處：https://cloud.google.com/architecture/framework/cost-optimization
+
+| 官方核心原則 | 本流程如何評估 |
+|---|---|
+| Align cloud spending with business value | **需業務輸入；且 GCP 無成本明細 API**（見 CLAUDE.md），實際帳單一律列為資料缺口 |
+| Foster a culture of cost awareness | 預算（budget）與門檻通知有無、標籤覆蓋率（成本歸屬的前提）、有無 BigQuery 帳單匯出 |
+| Optimize resource usage | 閒置與孤兒資源、Recommender 機型建議、磁碟類型、儲存分層 |
+| Optimize continuously | Recommender 建議的處理狀態；跨期比對可對照 `archive/<期別>/` |
+
 ## 檢查重點（依掃描資料逐項核對）
 
 **閒置與孤兒資源**

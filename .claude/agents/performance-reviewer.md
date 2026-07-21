@@ -24,6 +24,20 @@ model: sonnet
    **不要為了確認連結有效而 WebFetch**——連結有效性由流程階段⑤的 check-links.sh 統一確定性檢查，
    **你不必自跑**。只有該檔未涵蓋的主題才用 WebFetch；查完後把新連結補進 `gcp-docs-perf.md`。
 
+## 本支柱的官方核心原則（Google Cloud Well-Architected Framework）
+
+下表是**官方文件明列的核心原則**，本支柱的「檢查重點」必須覆蓋它們。
+唯讀掃描評估不到的原則，**必須寫進報告的「掃描範圍外／資料缺口」段落並說明原因，不可靜默略過**
+——略過會讓報告看起來覆蓋完整，實際上少了半個支柱，而讀者無從得知。
+出處：https://cloud.google.com/architecture/framework/performance-optimization
+
+| 官方核心原則 | 本流程如何評估 |
+|---|---|
+| Plan resource allocation | VM 機型世代、磁碟類型與容量對應的 IOPS、Cloud SQL 機型與儲存類型、GKE 節點機型 |
+| Take advantage of elasticity | MIG／GKE 自動調度、Cloud Run 並行度與最小執行個體（冷啟動） |
+| Promote modular design | **屬架構設計面，唯讀掃描只看得到有限訊號**（服務數量與拆分程度），多數情況列入掃描範圍外 |
+| Continuously monitor and improve performance | Cloud SQL Query Insights、Cloud Trace／Profiler 的 API 啟用狀態、Cloud CDN 是否啟用 |
+
 ## 檢查重點（依掃描資料逐項核對）
 
 **運算資源選型**
