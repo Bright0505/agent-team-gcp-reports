@@ -28,6 +28,7 @@ ops-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Infrastructure Manager overview](https://docs.cloud.google.com/infrastructure-manager/docs/overview)
 - [Create and update labels for projects](https://docs.cloud.google.com/resource-manager/docs/creating-managing-labels)
 - [Organization policy constraints](https://docs.cloud.google.com/resource-manager/docs/organization-policy/overview)
+- [Enable and disable services](https://docs.cloud.google.com/service-usage/docs/enable-disable)
 
 ## 變更與維護
 
