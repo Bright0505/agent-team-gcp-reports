@@ -128,6 +128,12 @@ const last = (u) => (u == null || u === '' ? null : String(u).replace(/\/+$/, ''
 // selfLink 中的區域：.../regions/asia-east1/...
 const regionOf = (u) => (/\/regions\/([^/]+)/.exec(String(u || '')) || [])[1] || null;
 const zoneToRegion = (z) => (z ? String(z).replace(/-[a-z]$/, '') : null);
+// selfLink 中的可用區或區域：.../zones/asia-east1-a/... 或 .../regions/asia-east1/...
+const zoneOf = (u) => (/\/(?:zones|regions)\/([^/]+)/.exec(String(u || '')) || [])[1] || null;
+// 執行個體群組的唯一鍵＝可用區/名稱。**名稱本身不唯一**：GKE 會在每個可用區各建一個
+// 同名的節點群組（實測 k8s-ig--<hash> 在 asia-east1-a/b/c 各一個）。只用名稱當鍵，
+// 三個群組會在 Map 中互相覆蓋，後端服務的邊也只會連到最後一個，另外兩條靜默消失。
+const groupKey = (zone, name) => `${zone || '?'}/${name}`;
 const uniq = (arr) => [...new Set(arr)];
 
 // ---------- 防火牆：規則是否套用到這台 VM ----------
@@ -289,6 +295,7 @@ function loadModel() {
       const zone = last(g.zone) || last(g.region);
       const members = vms.filter((v) => g.baseInstanceName && v.name.startsWith(`${g.baseInstanceName}-`));
       return {
+        key: groupKey(zone, g.name),
         name: g.name,
         zone,
         region: last(g.region) || zoneToRegion(zone),
@@ -301,13 +308,14 @@ function loadModel() {
       };
     })
     .sort(byName);
-  const migByName = new Map(migs.map((m) => [m.name, m]));
+  const groupByKey = new Map(migs.map((m) => [m.key, m]));
 
   // GKE → MIG 是 selfLink join（cluster.instanceGroupUrls），可證明
   const gkes = gkesRaw
     .map((c) => {
-      const igNames = (c.instanceGroupUrls || []).map(last);
-      const clusterMigs = igNames.map((n) => migByName.get(n)).filter(Boolean);
+      // instanceGroupUrls 帶著可用區，必須連可用區一起 join，否則三個同名群組會對到同一個
+      const igKeys = (c.instanceGroupUrls || []).map((u) => groupKey(zoneOf(u), last(u)));
+      const clusterMigs = igKeys.map((k) => groupByKey.get(k)).filter(Boolean);
       return {
         name: c.name,
         location: c.location,
@@ -324,7 +332,7 @@ function loadModel() {
       };
     })
     .sort(byName);
-  const migInGke = new Set(gkes.flatMap((g) => g.migs.map((m) => m.name)));
+  const migInGke = new Set(gkes.flatMap((g) => g.migs.map((m) => m.key)));
 
   // ── 未受管執行個體群組 ────────────────────────────────────────────
   // 負載平衡器的後端很常是**未受管**群組（GKE 自建的 k8s-ig--*、人工建立的群組），
@@ -337,10 +345,11 @@ function loadModel() {
     GAPS.push('未受管執行個體群組（data/compute/instance-groups-all.json 不存在＝此份掃描資料早於該項目，請重跑掃描）');
   }
   const unmanaged = (allGroupsRaw || [])
-    .filter((g) => !migByName.has(g.name))
+    .filter((g) => !groupByKey.has(groupKey(last(g.zone) || last(g.region), g.name)))
     .map((g) => {
       const zone = last(g.zone) || last(g.region);
       return {
+        key: groupKey(zone, g.name),
         name: g.name,
         zone,
         region: last(g.region) || zoneToRegion(zone),
@@ -355,7 +364,7 @@ function loadModel() {
       };
     })
     .sort(byName);
-  for (const g of unmanaged) migByName.set(g.name, g);
+  for (const g of unmanaged) groupByKey.set(g.key, g);
 
   // MIG 的網路歸屬原本靠成員 VM 推導，但**節點數為 0 的 MIG 沒有成員**，會推不出網路而掉出所有
   // VPC 之外（計數斷言首次實跑就抓到：6 個 MIG 只畫出 3 個）。GKE 擁有的 MIG 改用叢集的網路補上。
@@ -376,7 +385,8 @@ function loadModel() {
       iap: !!(b.iap || {}).enabled,
       logging: !!(b.logConfig || {}).enable,
       healthChecks: uniq((b.healthChecks || []).map(last)),
-      groups: uniq((b.backends || []).map((k) => last(k.group)).filter(Boolean)),
+      // 保留可用區：backends[].group 是完整 URL，只取 last() 會讓三個同名群組collapse 成一個
+      groups: uniq((b.backends || []).map((k) => (k.group ? groupKey(zoneOf(k.group), last(k.group)) : null)).filter(Boolean)),
     }))
     .sort(byName);
   const bsByName = new Map(bss.map((b) => [b.name, b]));
@@ -446,15 +456,18 @@ function loadModel() {
   // 那比畫一個誠實標示「未掃描到」的節點更容易誤導。
   const referencedGroups = uniq(bss.flatMap((b) => b.groups));
   const unresolvedGroups = referencedGroups
-    .filter((n) => !migByName.has(n))
-    .map((n) => {
+    .filter((k) => !groupByKey.has(k))
+    .map((k) => {
+      const [gz, ...rest] = k.split('/');
+      const n = rest.join('/');
       // 網路歸屬取自「指向這個群組的後端服務」所屬的轉送規則——轉送規則自己就帶 network，可證明
-      const fr = frs.find((f) => f.backendServices.some((b) => b.groups.includes(n)));
+      const fr = frs.find((f) => f.backendServices.some((b) => b.groups.includes(k)));
       return {
+        key: k,
         name: n,
         unresolved: true,
-        zone: null,
-        region: null,
+        zone: gz === '?' ? null : gz,
+        region: zoneToRegion(gz),
         size: 0,
         targetSize: 0,
         autoscaled: false,
@@ -465,7 +478,7 @@ function loadModel() {
     .sort(byName);
   // 圖上「執行個體群組」一律指這三種的聯集；migs 單獨保留給 GKE 的 selfLink join 用
   const groups = [...migs, ...unmanaged, ...unresolvedGroups];
-  for (const g of unresolvedGroups) migByName.set(g.name, g);
+  for (const g of unresolvedGroups) groupByKey.set(g.key, g);
 
   // ---- Cloud SQL ----
   const sqls = sqlsRaw
@@ -1206,7 +1219,7 @@ function planVpc(model, v) {
   });
 
   // 4. 非 GKE 的執行個體群組
-  const plainGroups = v.groups.filter((m) => !model.migInGke.has(m.name));
+  const plainGroups = v.groups.filter((m) => !model.migInGke.has(m.key));
   addRow({
     kind: 'mig',
     key: 'mig',
@@ -1456,7 +1469,7 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
     const cand = [`sum-vm-${vm.name}`];
     if (owningMig) {
       const gke = model.gkes.find((x) => x.migs.includes(owningMig));
-      cand.push(gke ? `sum-gke-${gke.name}` : `sum-grp-${owningMig.name}`);
+      cand.push(gke ? `sum-gke-${gke.name}` : `sum-grp-${owningMig.key}`);
     }
     const srcId = cand.find((s) => pg.has(s));
     // 同一個來源 cell（如 GKE 叢集）可能對應多台 VM，只需一條邊
@@ -1518,7 +1531,7 @@ function drawSummaryItem(pg, frame, row, item, ix, iy, sd) {
   }
   if (row.kind === 'mig') {
     pg.vertex(
-      `sum-grp-${item.name}`,
+      `sum-grp-${item.key}`,
       frame,
       groupLabel(item),
       STYLES.mig,
@@ -1777,12 +1790,12 @@ function buildVpcPage(model, v, drawn) {
   }
   // 3. GKE → MIG（selfLink，實線）
   for (const g of v.gkes) {
-    for (const m of g.migs) pg.edge(`e-${v.name}-gke-${g.name}-${m.name}`, get('gke', g.name), get('mig', m.name), '', V_FLOW);
+    for (const m of g.migs) pg.edge(`e-${v.name}-gke-${g.name}-${m.key}`, get('gke', g.name), get('mig', m.key), '', V_FLOW);
   }
   // 4. MIG → VM（baseInstanceName 前綴＝命名規則推導，非 selfLink，故虛線）
   for (const m of v.groups) {
     for (const vm of m.members) {
-      pg.edge(`e-${v.name}-mig-${m.name}-${vm.name}`, get('mig', m.name), get('vm', vm.name), '', V_FLOW + STYLES.edgeInferred);
+      pg.edge(`e-${v.name}-mig-${m.key}-${vm.name}`, get('mig', m.key), get('vm', vm.name), '', V_FLOW + STYLES.edgeInferred);
     }
   }
   // 5. VM → Cloud SQL
@@ -1931,7 +1944,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
     }
     case 'mig': {
       const id = pg.vertex(
-        `mig-${item.name}`,
+        `mig-${item.key}`,
         bandCell,
         groupLabel(item),
         STYLES.mig,
@@ -1940,7 +1953,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
         L.icon,
         L.icon
       );
-      put('mig', item.name, id);
+      put('mig', item.key, id);
       if (!item.unresolved) drawn.group++;
       return;
     }

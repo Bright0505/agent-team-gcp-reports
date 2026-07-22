@@ -41,8 +41,12 @@ N=0
 # gcp-architecture.drawio 是選配的 gcp-diagram skill 的產物，不一定存在——
 # `[ -f ]` 守衛讓它沒跑時自動跳過。存它的理由與存報告相同：架構圖逐期 diff 就是拓撲變化，
 # 那正是跨期回歸比對最直接的證據，留在 report/ 會被下一輪覆蓋掉。
+# 遮罩版（gcp-report-masked.html／report-data-masked.json）同樣有 [ -f ] 守衛：
+# 它只有在使用者明確要求對外分享版時才存在。存它的理由是**存檔要能重現當期實際交付的東西**——
+# 若對外送出的是遮罩版，事後只留正式版就對不上「當時給對方看的是什麼」。
 for f in "report/GCP架構報告.md" "report/report-data.json" "report/gcp-report.html" \
-         "report/gcp-architecture.drawio"; do
+         "report/gcp-architecture.drawio" \
+         "report/gcp-report-masked.html" "report/report-data-masked.json"; do
   [ -f "$f" ] && { cp "$f" "$DEST/"; N=$((N + 1)); }
 done
 mkdir -p "$DEST/findings"
