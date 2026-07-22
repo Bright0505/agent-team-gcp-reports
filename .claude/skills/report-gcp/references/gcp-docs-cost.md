@@ -2,7 +2,10 @@
 
 cost-optimizer 專用。使用規則見 `gcp-docs-common.md`。
 
-⚠️ **金額估算需要當下單價時，仍應 WebFetch 對應定價頁**（價格會變動，不可沿用舊值）。
+⚠️ **本檔只放技術文件連結（給發現附引用用），不再是查即時單價的地方**。
+金額估算需要當下單價時，改用 `bash .claude/skills/report-gcp/scripts/pricing-lookup.sh`
+直查 Cloud Billing Catalog API（回美金牌價，不做幣別轉換，同一次報告執行內快取、跨期不沿用）。
+下面「定價頁」段落的連結僅供人工對照／報告引用，cost-optimizer 不再 WebFetch 它們取數字。
 
 ## 支柱總論
 
@@ -36,7 +39,7 @@ cost-optimizer 專用。使用規則見 `gcp-docs-common.md`。
 - [Reserve a static external IP address](https://docs.cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address)
 - [Logging pricing and retention](https://docs.cloud.google.com/stackdriver/pricing)
 
-## 定價頁（估算用，WebFetch 取當下單價）
+## 定價頁（僅供人工對照／報告引用，即時單價改用 pricing-lookup.sh）
 
 - [Compute Engine pricing](https://docs.cloud.google.com/compute/all-pricing)
 - [Cloud Storage pricing](https://docs.cloud.google.com/storage/pricing)

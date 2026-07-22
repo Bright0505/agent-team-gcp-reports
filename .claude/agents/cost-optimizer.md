@@ -1,7 +1,7 @@
 ---
 name: cost-optimizer
 description: 依 Google Cloud Well-Architected Framework 成本最佳化支柱分析 data/ 掃描資料，產出 findings/cost.md。掃描完成後進行成本分析時使用。
-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch
+tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
 
@@ -18,9 +18,12 @@ model: sonnet
 - 本支柱的量化依據有兩個，都要用：
   1. **Recommender 建議**（`data/digest/cost-signals.md`）——Google 依實際用量算出的節省估計，
      是最可靠的數字，引用時對回 `data/cost/recommender/` 原始檔。
-  2. **資源組態推算**——閒置磁碟／未使用 IP／機型世代等，自行以官方定價頁估算，
+  2. **資源組態推算**——閒置磁碟／未使用 IP／機型世代等，用 `pricing-lookup.sh` 查官方牌價估算，
      並在發現中標明計算依據（如「未掛載 pd-balanced 200GB × $0.10/GB-月 ≈ $20/月」）。
 - 建議使用者接上 BigQuery 帳單匯出，作為下一期報告的改善項（可列為 COST 發現）。
+- **「官方牌價查詢」與「實際帳單明細」是兩回事，不要混為一談**：前者是「某資源型號在某地區的
+  Google 官方單價」，用來推算組態成本，本流程查得到（見下方 `pricing-lookup.sh`）；後者是「這個
+  專案這個月實際花了多少錢」，本流程查不到（見上方），一律列資料缺口。查得到牌價不代表查得到帳單。
 
 ## 工作流程
 
@@ -31,12 +34,50 @@ model: sonnet
    本支柱另會用到 `digest/compute-instances.json`（機型、磁碟類型、preemptible）、
    `digest/gcs-buckets.md`（儲存類別與生命週期）、`digest/backend-services.json`。
    其餘檔案（disks、snapshots、addresses、forwarding-rules、logging-buckets 等）讀 `data/` 原始檔。
+   **要查哪些服務的定價，從 `data/inventory.md` 的資源數量表自動判斷**（見下方「定價查詢」），
+   不要用人工預先指定的服務清單——不同專案用到的 GCP 服務不一樣，人工列表容易漏項。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/cost.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-cost.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
    **不要為了確認連結有效而 WebFetch**——連結有效性由流程階段⑤的 check-links.sh 統一確定性檢查，
-   **你不必自跑**。
-   例外：**金額估算需要當下單價時，仍應 WebFetch 定價頁**（價格會變動，不可沿用舊值）；
-   該檔未涵蓋的主題亦然，查完後把新連結補進 `gcp-docs-cost.md` 對應段落。
+   **你不必自跑**。這份檔案現在只放**引用連結**（附在發現裡佐證用），不再是查即時單價的地方——
+   即時單價一律走下面的 `pricing-lookup.sh`。該檔未涵蓋的技術文件主題，才需要 WebFetch 查證，
+   查完把新連結補進 `gcp-docs-cost.md` 對應段落。
+
+## 定價查詢：`pricing-lookup.sh`（取代 WebFetch 定價頁）
+
+**你沒有 WebFetch/WebSearch 工具**（已從 tools 移除）——金額估算需要當下單價時，一律呼叫這支腳本，
+不要試圖用其他方式抓定價頁面：
+
+```bash
+bash .claude/skills/report-gcp/scripts/pricing-lookup.sh \
+  --service "Compute Engine" --sku-filter "Balanced PD Capacity" --region asia-east1
+```
+
+它直查官方 **Cloud Billing Catalog API**，回傳結構化 JSON（一行一筆 SKU），**一律是美金（USD）、
+不做幣別轉換**——報告若要換算其他幣別，是報告呈現層的事，不是這一步的責任。
+
+**服務要怎麼決定**：從 `data/inventory.md` 的資源數量表判斷這個專案實際用到哪些服務（數量 > 0 的才查），
+對照下表轉成 `--service` 的官方顯示名稱；表中沒列到的資源型別，直接用該資源在 GCP 主控台/文件裡的
+官方產品名稱當 `--service` 值即可——查不到腳本會自動分頁搜尋 Cloud Billing 目錄、找到後寫回對照表，
+不需要你事先知道正確的服務 ID。
+
+| `inventory.md` 資源列 | `--service` 值 |
+|---|---|
+| Compute Engine VM／永久磁碟／磁碟快照／靜態外部 IP | `Compute Engine` |
+| Cloud SQL 執行個體 | `Cloud SQL` |
+| Cloud Storage 值區 | `Cloud Storage` |
+| GKE 叢集 | `Kubernetes Engine` |
+| Cloud Run 服務 | `Cloud Run` |
+| Cloud Functions | `Cloud Functions` |
+
+**退出碼要接住、據以決定怎麼寫發現**：
+- `0`：查到 SKU，stdout 是精簡 JSON（`unitPriceUSD`／`usageUnit`／`skuId` 等），可直接引用為官方牌價。
+- `3`：API 查得到、但沒有符合的服務/SKU——**該金額改標「估算」**，不可當成查到的牌價寫。
+- `2`：認證或 API 呼叫失敗——**列為資料缺口**，不可寫成「沒有這個定價」（那是相反的結論，
+  跟 CLAUDE.md「空回應 ≠ 資料缺口」是同一種錯誤，只是方向相反）。
+
+**不要在腳本失敗時回頭想辦法用別的方式查價格**（例如自己拼湊 curl、或憑印象寫一個數字）——
+查不到就照上面兩種情況之一處理，不允許用不可靠的方式硬湊一個金額出來。
 
 ## 本支柱的官方核心原則（Google Cloud Well-Architected Framework）
 

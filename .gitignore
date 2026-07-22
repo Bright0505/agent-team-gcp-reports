@@ -4,3 +4,9 @@
 
 # macOS
 .DS_Store
+
+# 定價查詢的 service ID 對照表（pricing-lookup.sh 用到才查、查過自動寫回）：
+# 內容不含機密，長期進版控是合理的，但這個專案目前仍是 template 階段，
+# 先不提交（避免帶著測試期間查到的內容進 template）。等專案正式用於特定情境時，
+# 使用者會另外指示改回進版控——屆時只要把這一行拿掉即可，不影響 pricing-lookup.sh 的邏輯。
+.claude/skills/report-gcp/references/pricing-service-ids.json
