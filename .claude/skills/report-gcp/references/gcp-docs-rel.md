@@ -36,6 +36,7 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Object Versioning](https://docs.cloud.google.com/storage/docs/object-versioning)
 - [Create schedules for disk snapshots](https://docs.cloud.google.com/compute/docs/disks/scheduled-snapshots)
 - [Backup and DR Service — Product overview](https://docs.cloud.google.com/backup-disaster-recovery/docs/concepts/backup-dr)
+- [Backup for GKE](https://docs.cloud.google.com/kubernetes-engine/docs/add-on/backup-for-gke/concepts/backup-for-gke)
 
 ## 負載平衡與健康檢查
 
@@ -48,3 +49,7 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Uptime checks](https://docs.cloud.google.com/monitoring/uptime-checks)
 - [Notification channels](https://docs.cloud.google.com/monitoring/support/notification-options)
 - [Configure log buckets](https://docs.cloud.google.com/logging/docs/buckets)
+
+## SLO 與錯誤預算
+
+- [Concepts in Service Monitoring（SLI／SLO／錯誤預算）](https://docs.cloud.google.com/stackdriver/docs/solutions/slo-monitoring)

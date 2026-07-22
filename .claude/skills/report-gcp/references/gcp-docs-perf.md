@@ -12,6 +12,7 @@ performance-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Apply machine type recommendations](https://docs.cloud.google.com/compute/docs/instances/apply-machine-type-recommendations-for-instances)
 - [General-purpose machine family for Compute Engine](https://docs.cloud.google.com/compute/docs/general-purpose-machines)
 - [GKE cluster autoscaler](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler)
+- [Autoscaling groups of instances (MIG autoscaler)](https://docs.cloud.google.com/compute/docs/autoscaler)
 
 ## 儲存效能
 
