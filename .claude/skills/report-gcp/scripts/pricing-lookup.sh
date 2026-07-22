@@ -16,10 +16,13 @@
 # 為什麼不做幣別轉換：Cloud Billing Catalog API 不帶 currencyCode 參數時預設回美金（USD）；
 # 本腳本一律回 USD，不做任何二次換算——報告若要呈現其他幣別是報告呈現層的事，不是本腳本的責任。
 #
-# 為什麼 service ID 對照表要進版控（`references/pricing-service-ids.json`）而不是 data/ 底下：
+# service ID 對照表（`references/pricing-service-ids.json`）為什麼放 references/ 而不是 data/ 底下：
 # 這份表存的是 Google 全域產品目錄代碼（如 Compute Engine = 6F81-5844-456A），跟任何 GCP 專案或客戶
-# 資料無關、不含機密；`data/` 每次重掃前會被清掉，放那裡會讓已經查過的服務又要重查一次，
-# 白白浪費「用過就記得」的價值。SKU 單價本身才會變動，所以單價快取仍然放在 data/cost/pricing-cache/。
+# 資料無關、不含機密，跟 `data/` 每次重掃前會被清掉的性質不同——放 data/ 會讓已經查過的服務又要
+# 重查一次，白白浪費「用過就記得」的價值。SKU 單價本身才會變動，所以單價快取仍然放在
+# data/cost/pricing-cache/。
+# 目前這個檔案暫不進版控（見 .gitignore 的說明：這個專案還在 template 階段）——但腳本邏輯不因此
+# 改變，本機累積照常運作；本檔可能不存在（全新 clone、或第一次執行），下面會自動建立空表。
 #
 # 為什麼不留「查不到就退回 WebFetch」的路：反覆 WebFetch 同一個定價頁、甚至抓非官方部落格，
 # 正是這支腳本要根除的根因（2026-07-22 實測：cost-optimizer 單次因此多花約 800 萬 token）。
@@ -37,6 +40,13 @@ fi
 SERVICE_IDS_FILE="$SKILL_DIR/references/pricing-service-ids.json"
 CACHE_DIR="$WORK_ROOT/data/cost/pricing-cache"
 SCAN_META="$WORK_ROOT/data/scan-meta.json"
+# 這份表目前不進版控（template 階段，見 .gitignore），全新 clone 或第一次執行時不存在——
+# 自動建立空表，不當成錯誤。已存在就不動它（不要覆蓋已經累積的內容）。
+if [ ! -f "$SERVICE_IDS_FILE" ]; then
+  mkdir -p "$(dirname "$SERVICE_IDS_FILE")"
+  echo '{"_note": "Cloud Billing Catalog API 的 serviceId 對照表，由 pricing-lookup.sh 自動建立與累積。", "services": {}}' \
+    | jq '.' > "$SERVICE_IDS_FILE"
+fi
 API="https://cloudbilling.googleapis.com/v1"
 
 # ── 純函式（--selftest 離線測這幾個，不連網）───────────────────────────

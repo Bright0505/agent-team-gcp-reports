@@ -99,7 +99,7 @@ node .claude/skills/gcp-diagram/scripts/build-diagram.js   # → report/gcp-arch
 | `.claude/skills/report-gcp/scripts/archive-report.sh` | 存檔本期報告到 archive/<期別>/ |
 | `.claude/skills/report-gcp/scripts/build-report.js` | 確定性 HTML 報告產生器（模板＋資料填充，不經過 LLM） |
 | `.claude/skills/report-gcp/scripts/pricing-lookup.sh` | 直查 Cloud Billing Catalog API 取官方牌價（美金），cost-optimizer 用來取代 WebFetch 定價頁 |
-| `.claude/skills/report-gcp/references/` | 已驗證的官方文件連結目錄（依支柱拆分，agent 只讀自己那份）；另含 `pricing-service-ids.json`（定價查詢用的服務代碼對照表，進版控） |
+| `.claude/skills/report-gcp/references/` | 已驗證的官方文件連結目錄（依支柱拆分，agent 只讀自己那份）；另含 `pricing-service-ids.json`（定價查詢用的服務代碼對照表，目前不進版控，見 `.gitignore`） |
 | `.claude/skills/report-gcp/templates/` | 發現格式、HTML 模板、主題、report-data 規格與範例 |
 | `.claude/skills/gcp-diagram/` | 選配：draw.io 架構圖產生器（不在無人值守流程內） |
 | `data/` | 掃描原始資料（gitignore，只留本機） |
