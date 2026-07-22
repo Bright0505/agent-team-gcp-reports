@@ -22,6 +22,8 @@
       "Bash(python3 .claude/skills/report-gcp/scripts/network-facts.py:*)",
       "Bash(node .claude/skills/report-gcp/scripts/build-report.js:*)",
       "Bash(node .claude/skills/gcp-diagram/scripts/build-diagram.js:*)",
+      "Bash(bash .claude/skills/report-gcp/scripts/pricing-lookup.sh:*)",
+      "Bash(.claude/skills/report-gcp/scripts/pricing-lookup.sh:*)",
       "Bash(gcloud auth list:*)",
       "Bash(gcloud config list:*)",
       "Bash(gcloud config get-value:*)",
