@@ -292,6 +292,13 @@ def alloydb_reachability(out, insts):
     if not insts:
         out.append("本專案沒有任何 AlloyDB instance（AlloyDB API 已啟用但未建立 cluster／instance＝有效證據，非資料缺口）。")
         return
+    # 哨兵：digest.sh 在「有 cluster 但 instance describe 全部失敗」時寫入 [{"_gap": ...}]，代表資料缺口。
+    # 這與空 []（0 cluster＝有效證據）是相反結論，必須分開印，不可誤報成「沒有任何 instance」而沉默低報安全結論。
+    if isinstance(insts, list) and insts and isinstance(insts[0], dict) and insts[0].get("_gap"):
+        out.append("⚠️ **有 AlloyDB cluster 但 instance 組態查詢失敗（instance describe 失敗）＝資料缺口**，")
+        out.append("無法評估其對外可及性（公開 IP × 授權外部網段）；詳見 `data/scan-errors.log` 與 `digest/scan-gaps.md`。")
+        out.append("**不可**據此斷言「沒有任何 instance」——那是相反的結論。")
+        return
     out.append("公開 IP × 授權外部網段 × 可用性**一起看**：公開 IP 關閉 ＝ 僅私有（VPC／PSC）連線；")
     out.append("公開 IP 開啟 ＋ 授權 `0.0.0.0/0` ＝ 全網際網路可連，屬高嚴重度。`READ_POOL` 型別的節點數")
     out.append("代表讀取冗餘；`availabilityType=REGIONAL` 才是跨可用區高可用。\n")

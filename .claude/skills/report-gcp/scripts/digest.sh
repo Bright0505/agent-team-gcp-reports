@@ -618,7 +618,12 @@ if [ -f "$AD_LIST" ]; then
     echo "    ✅ AlloyDB 設定表產生成功（未出現「欄位無法解析」）"
   fi
   # network-facts.py 用的機器可讀投影：instance 層公開 IP × 授權外部網段（確定性可及性判定）。
-  # 無 instance describe（含 0 cluster）時寫 []，讓 network-facts 印「無 AlloyDB」而非誤判資料缺口。
+  # 空值語意要三分（不可把「有 cluster 但 instance describe 失敗」與「0 cluster」都寫成空 []）：
+  #   有 instance describe 檔 → 正常投影；
+  #   有 cluster 但無任何 instance describe（describe 失敗＝資料缺口）→ 寫哨兵物件，讓 network-facts 印「資料缺口」
+  #     而非「沒有任何 instance」（後者會沉默低報安全結論）——判斷條件比照上方 markdown 的「未取得 instance describe」警示；
+  #   0 cluster → 寫 []，讓 network-facts 印「沒有任何 instance＝有效證據」。
+  AD_NCLUSTER="$(jq -r 'length' "$AD_LIST" 2>/dev/null || echo 0)"
   if [ -d "$AD_DETAIL" ] && ls "$AD_DETAIL"/*-instance.json > /dev/null 2>&1; then
     jq -s '[ .[] |
       ((.name // "") | split("/")) as $p |
@@ -634,6 +639,10 @@ if [ -f "$AD_LIST" ]; then
         nodeCount: (.readPoolConfig.nodeCount // null),
         ipAddress: (.ipAddress // null)
       } ]' "$AD_DETAIL"/*-instance.json > "$DIGEST/alloydb-instances.json"
+  elif [ "${AD_NCLUSTER:-0}" -gt 0 ]; then
+    # 有 cluster 但取不到任何 instance describe＝資料缺口（describe 失敗）：寫 network-facts.py 能辨識的哨兵物件，
+    # 不可寫空 []（會被誤判成「沒有任何 instance＝有效證據」）。
+    echo '[{"_gap": "alloydb_instance_describe_failed"}]' > "$DIGEST/alloydb-instances.json"
   else
     echo "[]" > "$DIGEST/alloydb-instances.json"
   fi
@@ -781,15 +790,22 @@ if [ -f "$PS_TOPICS" ]; then
       echo "誰能 publish／subscribe。含 \`allUsers\`／\`allAuthenticatedUsers\` 者屬資料外洩／濫發風險，等同 GCS 值區公開。"
       echo ""
       PS_PUBHDR=0
+      # topic 與 subscription 可能同短名（get-iam-policy 輸出不含資源名、僅靠檔名識別），故「類型」欄
+      # 依 IAM policy 檔所在的來源子目錄判別（topic-iam／sub-iam），避免兩列顯示相同名稱無法辨識來源。
       for f in "$PS_TIAM"/*.json "$PS_SIAM"/*.json; do
         [ -f "$f" ] || continue
-        row="$(jq -r --arg f "$(basename "$f" -iam.json)" '
+        case "$f" in
+          "$PS_TIAM"/*) pstype="topic" ;;
+          "$PS_SIAM"/*) pstype="subscription" ;;
+          *)            pstype="?" ;;
+        esac
+        row="$(jq -r --arg t "$pstype" --arg f "$(basename "$f" -iam.json)" '
           ([.bindings[]? | select((.members // []) | any(. == "allUsers" or . == "allAuthenticatedUsers")) | .role]) as $pub |
-          if ($pub | length) > 0 then "| \($f) | " + ($pub | join(", ")) + " |" else empty end' "$f" 2>/dev/null)"
+          if ($pub | length) > 0 then "| \($t) | \($f) | " + ($pub | join(", ")) + " |" else empty end' "$f" 2>/dev/null)"
         if [ -n "$row" ]; then
           if [ "$PS_PUBHDR" -eq 0 ]; then
-            echo "| 資源（topic／subscription） | 公開授權角色 |"
-            echo "|---|---|"
+            echo "| 類型 | 資源名 | 公開授權角色 |"
+            echo "|---|---|---|"
             PS_PUBHDR=1
           fi
           echo "$row"
@@ -855,31 +871,45 @@ if [ -f "$DF_JOBS" ]; then
     else
       echo "| Job ID | 名稱 | 類型 | 狀態 | 區域 | worker 網路（VPC） | worker 子網 | worker 公開 IP | worker 機型 | CMEK |"
       echo "|---|---|---|---|---|---|---|---|---|---|"
-      # 逐一 describe --full 檔投影（含 environment）；describe 檔缺失（describe 失敗）的 job 靠 jobs.json 補摘要列。
-      for f in "$DF_DETAIL"/*.json; do
-        [ -f "$f" ] || continue
-        jq -r '
-          (.id // "⚠️ 欄位無法解析") as $id |
-          (.name // "?") as $name |
-          ((.type // "?") | sub("JOB_TYPE_"; "")) as $type |
-          ((.currentState // .requestedState // "?") | sub("JOB_STATE_"; "")) as $state |
-          (.location // "?") as $loc |
-          (.environment // .Environment // null) as $env |
-          (($env.workerPools // $env.worker_pools) // null) as $pools |
-          (if $env == null then "⚠️ 欄位無法解析"
-           else (([$pools[]? | (.network // empty)] | first) // "default（預設網路）" | split("/") | last) end) as $net |
-          (if $env == null then "—"
-           else (([$pools[]? | (.subnetwork // empty)] | first) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
-          (([$pools[]? | (.ipConfiguration // .ip_configuration // empty)] | first) // "WORKER_IP_UNSPECIFIED") as $ipcfg |
-          (if $env == null then "⚠️ 欄位無法解析"
-           elif $ipcfg == "WORKER_IP_PRIVATE" then "私有（無公開 IP）"
-           else "**有公開 IP（暴露面）**" end) as $pubip |
-          (if $env == null then "?"
-           else (([$pools[]? | (.machineType // .machine_type // empty)] | first) // "未指定") end) as $mtype |
-          (if (($env.serviceKmsKeyName // $env.service_kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
-          "| \($id) | \($name) | \($type) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($mtype) | \($cmek) |"
-        ' "$f"
-      done
+      # 以 jobs.json（list 摘要）為 job 全集，逐一檢查對應的 describe 檔：
+      #   describe 檔存在→用完整投影（含 environment worker 網路組態）；
+      #   describe 失敗（run() 失敗即刪 json → 檔缺席）→用 jobs.json 摘要補一列，describe-only 欄位
+      #   （worker 網路／子網／公開 IP／機型／CMEK）標「⚠️ describe 失敗＝資料缺口」，讓該 job 仍出現在表中。
+      #   worker 公開 IP 是安全訊號，job 無聲從表中消失比誇大更危險，故一律補列而非只掃 describe 檔。
+      #   （此標記非「欄位無法解析」，故不會誤觸下方 schema 斷言；describe 失敗已由 run() 記入 scan-errors.log→scan-gaps.md。）
+      while IFS=$'\t' read -r dfid dfname dftype dfstate dfloc; do
+        [ -z "$dfid" ] && continue
+        dfdescribe="$DF_DETAIL/$dfid-describe.json"
+        if [ -f "$dfdescribe" ]; then
+          jq -r '
+            (.id // "⚠️ 欄位無法解析") as $id |
+            (.name // "?") as $name |
+            ((.type // "?") | sub("JOB_TYPE_"; "")) as $type |
+            ((.currentState // .requestedState // "?") | sub("JOB_STATE_"; "")) as $state |
+            (.location // "?") as $loc |
+            (.environment // .Environment // null) as $env |
+            (($env.workerPools // $env.worker_pools) // null) as $pools |
+            (if $env == null then "⚠️ 欄位無法解析"
+             else (([$pools[]? | (.network // empty)] | first) // "default（預設網路）" | split("/") | last) end) as $net |
+            (if $env == null then "—"
+             else (([$pools[]? | (.subnetwork // empty)] | first) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
+            (([$pools[]? | (.ipConfiguration // .ip_configuration // empty)] | first) // "WORKER_IP_UNSPECIFIED") as $ipcfg |
+            (if $env == null then "⚠️ 欄位無法解析"
+             elif $ipcfg == "WORKER_IP_PRIVATE" then "私有（無公開 IP）"
+             else "**有公開 IP（暴露面）**" end) as $pubip |
+            (if $env == null then "?"
+             else (([$pools[]? | (.machineType // .machine_type // empty)] | first) // "未指定") end) as $mtype |
+            (if (($env.serviceKmsKeyName // $env.service_kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
+            "| \($id) | \($name) | \($type) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($mtype) | \($cmek) |"
+          ' "$dfdescribe"
+        else
+          # describe 失敗＝資料缺口：用 jobs.json list 摘要補列，describe-only 欄位標記缺口，避免無聲消失。
+          dftype="${dftype#JOB_TYPE_}"
+          dfstate="${dfstate#JOB_STATE_}"
+          printf '| %s | %s | %s | %s | %s | ⚠️ describe 失敗＝資料缺口 | — | ⚠️ describe 失敗＝資料缺口 | ? | ⚠️ describe 失敗＝資料缺口 |\n' \
+            "$dfid" "$dfname" "$dftype" "$dfstate" "$dfloc"
+        fi
+      done < <(jq -r '.[]? | [(.id // "?"), (.name // "?"), (.type // "?"), (.currentState // .requestedState // "?"), (.location // "?")] | @tsv' "$DF_JOBS")
     fi
   } > "$DIGEST/dataflow-jobs.md"
   echo "  dataflow-jobs.md  $(wc -c < "$DIGEST/dataflow-jobs.md") 位元組"
@@ -927,7 +957,19 @@ if [ -f "$DP_SRC" ]; then
     echo ""
     DP_N="$(jq -r 'length' "$DP_SRC" 2>/dev/null || echo 0)"
     if [ "${DP_N:-0}" -eq 0 ]; then
-      echo "**本專案沒有任何 Dataproc cluster**（Dataproc API 已啟用但各 active region 的 clusters list 皆回空＝有效證據，不是資料缺口）。"
+      # 合併檔為 []：需區分「所有 active region 都成功查詢且皆空」（有效證據）與「部分 region 查詢失敗」（資料缺口）。
+      # scan.sh 逐 region 跑 list，run() 對失敗 region 會刪其 clusters-<region>.json，jq -s add 只合併成功／空的檔，
+      # 故「部分空、部分失敗」合併後仍為 []——不可據此宣稱全專案無叢集。對比「實際成功產出的 region 檔數」與
+      # active-regions.txt 的 region 總數（濾空行）：相等＝全數查過→維持有效證據語句；不相等＝有 region 查詢失敗→改印警語。
+      # 注意排除合併檔本身 clusters-all.json（也符合 clusters-*.json glob）。
+      DP_NREGION="$(grep -cve '^$' "$DATA/active-regions.txt" 2>/dev/null || echo 0)"
+      DP_NFILE="$(ls "$DATA/dataproc"/clusters-*.json 2>/dev/null | grep -cv '/clusters-all\.json$')"
+      if [ "${DP_NFILE:-0}" -eq "${DP_NREGION:-0}" ]; then
+        echo "**本專案沒有任何 Dataproc cluster**（Dataproc API 已啟用但各 active region 的 clusters list 皆回空＝有效證據，不是資料缺口）。"
+      else
+        echo "⚠️ **部分 region（成功 ${DP_NFILE}／共 ${DP_NREGION}）查詢失敗**，本表未涵蓋全部 region，該情形屬**資料缺口**，"
+        echo "詳見 \`scan-gaps.md\`；以下合併結果為空僅代表**成功查詢之 region** 無叢集，**不可**據此斷言全專案無 Dataproc cluster。"
+      fi
     else
       echo "| 叢集 | 狀態 | 區域／可用區 | worker 網路（VPC） | worker 子網 | worker 公開 IP | 主節點數 | worker 數 | worker 服務帳戶 | CMEK | Kerberos |"
       echo "|---|---|---|---|---|---|---:|---:|---|---|---|"
@@ -999,7 +1041,17 @@ if [ -f "$VX_SRC" ]; then
     echo ""
     VX_N="$(jq -r 'length' "$VX_SRC" 2>/dev/null || echo 0)"
     if [ "${VX_N:-0}" -eq 0 ]; then
-      echo "**本專案沒有任何 Vertex AI Endpoint**（Vertex AI API 已啟用但各 active region 的 endpoints list 皆回空＝有效證據，不是資料缺口）。"
+      # 合併檔為 []：同 Dataproc，需區分「所有 active region 都成功查詢且皆空」（有效證據）與「部分 region 查詢失敗」
+      # （資料缺口）。scan.sh 逐 region 跑 list，run() 對失敗 region 會刪其 endpoints-<region>.json，合併後「部分空、
+      # 部分失敗」仍為 []。對比成功產出的 region 檔數與 active-regions.txt region 總數（濾空行、排除合併檔 endpoints-all.json）。
+      VX_NREGION="$(grep -cve '^$' "$DATA/active-regions.txt" 2>/dev/null || echo 0)"
+      VX_NFILE="$(ls "$DATA/vertex"/endpoints-*.json 2>/dev/null | grep -cv '/endpoints-all\.json$')"
+      if [ "${VX_NFILE:-0}" -eq "${VX_NREGION:-0}" ]; then
+        echo "**本專案沒有任何 Vertex AI Endpoint**（Vertex AI API 已啟用但各 active region 的 endpoints list 皆回空＝有效證據，不是資料缺口）。"
+      else
+        echo "⚠️ **部分 region（成功 ${VX_NFILE}／共 ${VX_NREGION}）查詢失敗**，本表未涵蓋全部 region，該情形屬**資料缺口**，"
+        echo "詳見 \`scan-gaps.md\`；以下合併結果為空僅代表**成功查詢之 region** 無 endpoint，**不可**據此斷言全專案無 Vertex AI Endpoint。"
+      fi
     else
       echo "| Endpoint ID | 顯示名稱 | 區域 | 對外暴露 | VPC 歸屬（peering） | PSC | CMEK |"
       echo "|---|---|---|---|---|---|---|"
