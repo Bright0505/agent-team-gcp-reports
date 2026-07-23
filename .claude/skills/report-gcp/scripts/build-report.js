@@ -306,6 +306,15 @@ function maskGuard(html) {
     [/\b[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com\b/g, '疑似未遮罩的服務帳戶電子郵件'],
     [/\bya29\.[0-9A-Za-z_-]+/g, '疑似 OAuth 存取權杖'],
   ];
+  // 動態規則：把本次掃描的實際識別碼列為禁止樣式——未在 report-data.json 替換掉就會被攔下。
+  // 靜態樣式認不出專案 ID（它不是固定格式），也漏掉帳單帳戶（非 12 位純數字），故從 scan-meta.json 補上。
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(WORK_ROOT, 'data', 'scan-meta.json'), 'utf8'));
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (meta.project) rules.push([new RegExp(esc(meta.project), 'g'), '未遮罩的專案 ID']);
+    if (meta.project_number) rules.push([new RegExp('\\b' + esc(meta.project_number) + '\\b', 'g'), '未遮罩的專案編號']);
+    if (meta.billing_account) rules.push([new RegExp(esc(meta.billing_account), 'g'), '未遮罩的帳單帳戶']);
+  } catch { /* 無 data/scan-meta.json（如從 archive 產出）就略過動態規則，靜態樣式仍生效 */ }
   const hits = [];
   for (const [re, label] of rules) {
     let m;
@@ -366,7 +375,7 @@ function main() {
 
   fs.mkdirSync(path.dirname(opts.out), { recursive: true });
   fs.writeFileSync(opts.out, html);
-  console.log(`已產生：${path.relative(WORK_ROOT, opts.out)}（${html.length.toLocaleString('en-US')} bytes${opts.standalone ? '，standalone' : '，Artifact 片段'}${opts.masked ? '，已通過遮罩檢查' : ''}）`);
+  console.log(`已產生：${path.relative(WORK_ROOT, opts.out)}（${html.length.toLocaleString('en-US')} bytes${opts.standalone ? '，standalone' : '，Artifact 片段'}${opts.masked ? '，已通過洩漏防呆（僅攔高危識別碼＋本次專案識別碼；不會自動遮罩資源／主機名，請自行確認）' : ''}）`);
 }
 
 main();
