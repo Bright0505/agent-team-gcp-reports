@@ -33,7 +33,9 @@ model: opus
    **`digest/memcached-instances.md`**（Memorystore Memcached 綁定的 `authorizedNetwork` VPC；Memcached API
    未啟用或無執行個體時不存在）、
    **`digest/pubsub.md`**（Pub/Sub topic／subscription 存取控制與資料流：push endpoint 對外資料流／OIDC 驗證、
-   IAM 公開授權、訊息儲存地區限制、CMEK；無 topic／subscription 時該表會明寫「沒有任何 Pub/Sub topic 或 subscription」）。
+   IAM 公開授權、訊息儲存地區限制、CMEK；無 topic／subscription 時該表會明寫「沒有任何 Pub/Sub topic 或 subscription」）、
+   **`digest/dataflow-jobs.md`**（Dataflow job 的 worker 公開 IP 暴露面／worker 網路歸屬（VPC）／CMEK；**此表是掃描當下即時快照、
+   非期別歷史**；Dataflow API 未啟用時此檔不存在＝資料缺口）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -128,6 +130,13 @@ model: opus
   是否限制訊息落地地區（資料主權）、是否使用 **CMEK**（`kmsKeyName`；缺席＝Google 管理金鑰）。
   ⚠️ 本專案掃描時無任何 topic／subscription（Pub/Sub API 已啟用但未建立資源＝有效證據，非資料缺口），
   此項寫「本專案未建立 Pub/Sub topic 或 subscription」即可
+- **Dataflow worker 網路暴露與加密**（見 `digest/dataflow-jobs.md`）：三個重點——(1) **worker 公開 IP**
+  （`ipConfiguration`）：`WORKER_IP_PRIVATE` 以外（含未指定＝**預設有公開 IP**）＝worker VM 有對外 IP，是常見的
+  非必要對外暴露面，應改用 `--no-use-public-ips`（關閉後須在子網啟用 Private Google Access），digest 已把有公開 IP
+  的 job 以粗體標「**有公開 IP（暴露面）**」；(2) **worker 網路歸屬**（`network`／`subnetwork`）：worker 跑在哪個
+  VPC／子網，決定其可及的內部資源，未指定＝跑在 default 網路（治理訊號）；(3) **CMEK**（`serviceKmsKeyName`；
+  缺席＝Google 管理金鑰）。⚠️ **此表是掃描當下的即時快照、非期別歷史**（Dataflow job 有生命週期，已清除的舊 job
+  不會出現），判讀時以「當下狀態」理解。Dataflow API 未啟用時此檔不存在，屬資料缺口，寫「Dataflow API 未啟用，無法評估」即可
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

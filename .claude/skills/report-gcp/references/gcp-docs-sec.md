@@ -86,6 +86,13 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Configure message storage policies（訊息落地地區限制／資料主權）](https://docs.cloud.google.com/pubsub/docs/resource-location-restriction)
 - [Configure message encryption with CMEK for Pub/Sub（客戶自管加密金鑰）](https://docs.cloud.google.com/pubsub/docs/encryption)
 
+## Dataflow worker 網路安全性與加密
+
+- [Specify a network and subnetwork（worker VM 的 network／subnetwork VPC 歸屬）](https://docs.cloud.google.com/dataflow/docs/guides/specifying-networks)
+- [Configure internet access and firewall rules（關閉 worker 公開 IP：--no-use-public-ips／Private Google Access）](https://docs.cloud.google.com/dataflow/docs/guides/routes-firewall)
+- [Access control with IAM for Dataflow（誰能提交／管理 job）](https://docs.cloud.google.com/dataflow/docs/concepts/access-control)
+- [Use customer-managed encryption keys for Dataflow（CMEK）](https://docs.cloud.google.com/dataflow/docs/guides/customer-managed-encryption-keys)
+
 ## 稽核
 
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)

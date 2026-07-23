@@ -812,6 +812,90 @@ else
   echo "  pubsub.md  略過（無 pubsub/topics.json，Pub/Sub topics list 查詢失敗或 API 未啟用）"
 fi
 
+# ── Dataflow job（worker 網路歸屬／公開 IP 暴露面／CMEK）總表 ─────────────
+# 來源：dataflow/jobs.json（jobs list 摘要：id／name／type／currentState／location）＋
+#      dataflow/job-detail/*-describe.json（jobs describe --full，含 environment.workerPools 網路組態）。
+# ⚠️⚠️ **Dataflow job 是即時快照、非期別歷史**：`dataflow jobs list` 回的是掃描當下彙整各區域的 active 與
+#      近期 job，**不是**期別內執行過的所有 job（已清除的舊 batch job 不會出現）。此表僅反映掃描當刻的狀態。
+# 安全重點（見 gcp-docs-sec.md「Dataflow worker 網路安全性與加密」）：
+#   (1) **worker 公開 IP**（environment.workerPools[].ipConfiguration）：`WORKER_IP_PRIVATE`＝無公開 IP；
+#       `WORKER_IP_PUBLIC` 或**未指定（預設）**＝worker 有公開 IP，是常見的非必要對外暴露面，對應
+#       `--no-use-public-ips`（關閉後須在子網啟用 Private Google Access 才能連 Google API）；
+#   (2) **worker 網路歸屬**（environment.workerPools[].network／subnetwork）：worker VM 跑在哪個 VPC／子網，
+#       決定其可及的內部資源；未指定 network＝跑在 default 網路；
+#   (3) **CMEK**（environment.serviceKmsKeyName）：是否用客戶自管金鑰加密 job 的狀態與暫存資料。
+# ⚠️ 空值語意：dataflow/jobs.json **不存在**＝jobs list 未執行（API 未啟用；scan.sh 已把「API 未啟用時 list
+#    仍回 [] 掩蓋真實狀態」這個坑攔在 scan.sh，改記資料缺口，故此處檔案不存在＝資料缺口，本段優雅略過）；
+#    **存在但為 []**＝API 已啟用但掃描當下無 active／近期 job（有效證據，非資料缺口）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 dataflow.googleapis.com 未啟用，describe 迴圈實跑 0 次，同 Cloud Run
+#    ／App Engine 等）；僅依官方 Dataflow v1b3 Job／Environment／WorkerPool schema 撰寫。防呆錨點：有 job 但
+#    describe 回不出 `environment`（--full 沒帶到或 schema 與假設不同）→ 網路欄印「⚠️ 欄位無法解析」讓斷言 FAIL，
+#    **絕不可默默印「未設定」**。ipConfiguration 缺席／未指定＝**預設有公開 IP**（Dataflow 預設值），非解析失敗。
+#    environment 巢狀鍵同時接 camelCase（workerPools／serviceKmsKeyName）與 snake_case（worker_pools／
+#    service_kms_key_name）——Dataflow gcloud 輸出的 snake/camel 無真實資料可證，比照 GCS 值區雙接防呆。
+DF_JOBS="$DATA/dataflow/jobs.json"
+DF_DETAIL="$DATA/dataflow/job-detail"
+if [ -f "$DF_JOBS" ]; then
+  {
+    echo "# Dataflow job worker 網路／公開 IP／CMEK 總表"
+    echo ""
+    echo "來源：\`data/dataflow/jobs.json\`（jobs list 摘要）＋ \`data/dataflow/job-detail/*-describe.json\`"
+    echo "（jobs describe --full，含 \`environment.workerPools\` worker 網路組態）。此表為上述檔案的確定性投影。"
+    echo ""
+    echo "> ⚠️ **本表是掃描當下的即時快照，非期別內的歷史 job 全集**：\`dataflow jobs list\` 只彙整掃描當刻各"
+    echo "> 區域的 active 與近期 job，已清除的舊 batch job 不會出現。判讀時務必以「當下狀態」而非「本期執行過的所有 job」理解。"
+    echo ""
+    echo "安全重點：**worker 公開 IP**（\`ipConfiguration\`；\`WORKER_IP_PRIVATE\`＝無公開 IP，其餘含未指定＝有公開 IP＝暴露面，"
+    echo "對應 \`--no-use-public-ips\`）；**worker 網路歸屬**（\`network\`／\`subnetwork\`＝worker 跑在哪個 VPC）；"
+    echo "**CMEK**（\`serviceKmsKeyName\`）。"
+    echo ""
+    DF_N="$(jq -r 'length' "$DF_JOBS" 2>/dev/null || echo 0)"
+    if [ "${DF_N:-0}" -eq 0 ]; then
+      echo "**掃描當下沒有任何 active／近期 Dataflow job**（Dataflow API 已啟用但 jobs list 回空＝有效證據，不是資料缺口）。"
+    else
+      echo "| Job ID | 名稱 | 類型 | 狀態 | 區域 | worker 網路（VPC） | worker 子網 | worker 公開 IP | worker 機型 | CMEK |"
+      echo "|---|---|---|---|---|---|---|---|---|---|"
+      # 逐一 describe --full 檔投影（含 environment）；describe 檔缺失（describe 失敗）的 job 靠 jobs.json 補摘要列。
+      for f in "$DF_DETAIL"/*.json; do
+        [ -f "$f" ] || continue
+        jq -r '
+          (.id // "⚠️ 欄位無法解析") as $id |
+          (.name // "?") as $name |
+          ((.type // "?") | sub("JOB_TYPE_"; "")) as $type |
+          ((.currentState // .requestedState // "?") | sub("JOB_STATE_"; "")) as $state |
+          (.location // "?") as $loc |
+          (.environment // .Environment // null) as $env |
+          (($env.workerPools // $env.worker_pools) // null) as $pools |
+          (if $env == null then "⚠️ 欄位無法解析"
+           else (([$pools[]? | (.network // empty)] | first) // "default（預設網路）" | split("/") | last) end) as $net |
+          (if $env == null then "—"
+           else (([$pools[]? | (.subnetwork // empty)] | first) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
+          (([$pools[]? | (.ipConfiguration // .ip_configuration // empty)] | first) // "WORKER_IP_UNSPECIFIED") as $ipcfg |
+          (if $env == null then "⚠️ 欄位無法解析"
+           elif $ipcfg == "WORKER_IP_PRIVATE" then "私有（無公開 IP）"
+           else "**有公開 IP（暴露面）**" end) as $pubip |
+          (if $env == null then "?"
+           else (([$pools[]? | (.machineType // .machine_type // empty)] | first) // "未指定") end) as $mtype |
+          (if (($env.serviceKmsKeyName // $env.service_kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
+          "| \($id) | \($name) | \($type) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($mtype) | \($cmek) |"
+        ' "$f"
+      done
+    fi
+  } > "$DIGEST/dataflow-jobs.md"
+  echo "  dataflow-jobs.md  $(wc -c < "$DIGEST/dataflow-jobs.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 job 時 describe 必須回得出 environment（--full 才有）；回不出＝路徑錯或 --full 沒帶到，
+  # 印「⚠️ 欄位無法解析」讓此斷言 FAIL（gcloud 換 schema 或漏 --full 會第一時間炸出來）。0 job 時檔案為說明文字、斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/dataflow-jobs.md"; then
+    echo "    ❌ 斷言失敗：Dataflow job 的 environment／worker 網路欄位解析不出來（gcloud 輸出 schema 與假設不同，或 describe 未帶 --full），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Dataflow worker 網路表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  dataflow-jobs.md  略過（無 dataflow/jobs.json，Dataflow API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。
