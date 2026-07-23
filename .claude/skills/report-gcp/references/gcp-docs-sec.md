@@ -71,6 +71,13 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Customer-managed Cloud KMS keys for BigQuery](https://docs.cloud.google.com/bigquery/docs/customer-managed-encryption)
 - [BigQuery locations（資料所在地／資料主權）](https://docs.cloud.google.com/bigquery/docs/locations)
 
+## AlloyDB 網路安全性與加密
+
+- [Connect using public IP（公開 IP 連線；生產環境不建議開放）](https://docs.cloud.google.com/alloydb/docs/connect-public-ip)
+- [Connect to a cluster from outside its VPC（授權外部網段 authorized external networks）](https://docs.cloud.google.com/alloydb/docs/connect-external)
+- [Private IP overview（Private Services Access／PSC 私有連線）](https://docs.cloud.google.com/alloydb/docs/private-ip)
+- [About CMEK for AlloyDB（客戶自管加密金鑰）](https://docs.cloud.google.com/alloydb/docs/cmek)
+
 ## 稽核
 
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)

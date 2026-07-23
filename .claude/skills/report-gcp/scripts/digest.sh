@@ -532,6 +532,115 @@ else
   echo "  filestore-instances.md  略過（無 storage/filestore-instances.json，Filestore API 未啟用或無執行個體）"
 fi
 
+# ── AlloyDB cluster／instance 設定總表 ─────────────────────────────────
+# 來源：db/alloydb-clusters.json（clusters list 索引）＋ db/alloydb-detail/*-cluster.json（cluster describe）
+#      ＋ db/alloydb-detail/*-instance.json（instance describe）。cluster→instance 兩層。
+# 一次看完：cluster 綁定 VPC／備份（automated＋continuous）／CMEK／PSC，與 instance 型別（PRIMARY／
+# READ_POOL）／可用性（ZONAL／REGIONAL）／公開 IP／授權外部網段（安全暴露面）／read pool 節點數（讀取冗餘）。
+# ⚠️ 空值語意：db/alloydb-clusters.json **不存在**＝clusters list 查詢失敗（權限不足，資料缺口）；
+#    **存在但為 []**＝AlloyDB API 已啟用但專案無任何 cluster（有效證據，非資料缺口；2026-07-23 本專案實測即此情形，
+#    比照 BigQuery）。兩者結論相反，不可混。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案無 cluster，同 Cloud Run／App Engine／Filestore）；僅依官方 AlloyDB
+#    REST v1 clusters／instances schema。防呆錨點是 cluster／instance 的 .name（解析不出來→「⚠️ 欄位無法解析」
+#    →斷言 FAIL），絕不可默默印「未設定」。公開 IP（networkConfig.enablePublicIp）缺席＝合法預設 false
+#    （非解析失敗，比照 GKE enablePrivateNodes 缺席補預設）；備份政策缺席以「?」表示、不臆測預設值。
+# 另外產出 digest/alloydb-instances.json 供 network-facts.py 算「公開 IP × 授權外部網段」的確定性可及性判定
+#（比照 Cloud SQL——同為託管資料庫的對外暴露面，需 deterministic 判定避免 LLM 降級）。
+AD_LIST="$DATA/db/alloydb-clusters.json"
+AD_DETAIL="$DATA/db/alloydb-detail"
+if [ -f "$AD_LIST" ]; then
+  {
+    echo "# AlloyDB cluster／instance 設定總表"
+    echo ""
+    echo "來源：\`data/db/alloydb-clusters.json\`（clusters list 索引）＋ \`data/db/alloydb-detail/*-cluster.json\`"
+    echo "（cluster describe）＋ \`data/db/alloydb-detail/*-instance.json\`（instance describe）。"
+    echo "此表為上述檔案的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**公開 IP ＋ 授權外部網段是 AlloyDB 的對外安全暴露面**（instance 層 \`networkConfig.enablePublicIp\`／"
+    echo "\`authorizedExternalNetworks[].cidrRange\`）：公開 IP 開啟＋授權 \`0.0.0.0/0\` ＝全網際網路可連，屬高嚴重度"
+    echo "（判定見 \`digest/network-facts.md\` 第 5 段）。**可用性**看 instance 的 \`availabilityType\`：\`REGIONAL\`＝"
+    echo "跨可用區高可用、\`ZONAL\`＝單一可用區無備援。**備份**分兩種：\`automatedBackupPolicy\`（排程完整備份）與"
+    echo "\`continuousBackupConfig\`（連續備份／PITR）。\`CMEK\` 欄為「Google 管理」代表未使用客戶自管金鑰。"
+    echo ""
+    if [ "$(jq -r 'length' "$AD_LIST" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 AlloyDB cluster**（AlloyDB API 已啟用但未建立任何 cluster＝有效證據，不是資料缺口）。"
+    elif [ -d "$AD_DETAIL" ] && ls "$AD_DETAIL"/*-cluster.json > /dev/null 2>&1; then
+      echo "## Cluster（VPC 綁定／備份／CMEK）"
+      echo ""
+      echo "| Cluster | 區域 | 資料庫版本 | 綁定 VPC | 保留網段 | PSC | 自動備份 | 持續備份 | CMEK |"
+      echo "|---|---|---|---|---|---|---|---|---|"
+      jq -rs '.[] |
+        ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+        ($p | last) as $id |
+        (if ($p | length) >= 6 then $p[3] else "?" end) as $region |
+        ((.networkConfig.network // .network // "") | if . == "" then "—" else (split("/") | last) end) as $vpc |
+        "| \($id) | \($region) | \(.databaseVersion // "?") | \($vpc) | \(.networkConfig.allocatedIpRange // "—") | " +
+        (if .pscConfig.pscEnabled == true then "啟用" else "未啟用" end) + " | " +
+        (if .automatedBackupPolicy.enabled == true then "啟用" elif (.automatedBackupPolicy | type) == "object" then "**停用**" else "?" end) + " | " +
+        (if .continuousBackupConfig.enabled == true then "啟用" elif (.continuousBackupConfig | type) == "object" then "**停用**" else "?" end) + " | " +
+        (if .encryptionConfig.kmsKeyName then "有" else "Google 管理" end) + " |"
+      ' "$AD_DETAIL"/*-cluster.json
+      echo ""
+      echo "## Instance（型別／可用性／公開 IP 暴露面／read pool）"
+      echo ""
+      if ls "$AD_DETAIL"/*-instance.json > /dev/null 2>&1; then
+        echo "| Instance | Cluster | 型別 | 可用性 | 公開 IP | 授權外部網段 | PSC | read pool 節點數 | 私有 IP |"
+        echo "|---|---|---|---|---|---|---|---|---|"
+        jq -rs '.[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+          ($p | last) as $id |
+          (if ($p | length) >= 6 then $p[5] else "?" end) as $cid |
+          (.networkConfig.enablePublicIp // false) as $pub |
+          [ (.networkConfig.authorizedExternalNetworks // [])[] | .cidrRange // empty ] as $authnets |
+          "| \($id) | \($cid) | \(.instanceType // "?") | \(.availabilityType // "?") | " +
+          (if $pub then "**是**" else "否" end) + " | " +
+          (if ($authnets | length) > 0 then (if ($authnets | any(. == "0.0.0.0/0")) then "**" + ($authnets | join(",")) + "**" else ($authnets | join(",")) end) else "—" end) + " | " +
+          (if (has("pscInstanceConfig")) then "啟用" else "未啟用" end) + " | " +
+          ((.readPoolConfig.nodeCount // "—") | tostring) + " | " +
+          (.ipAddress // "—") + " |"
+        ' "$AD_DETAIL"/*-instance.json
+      else
+        echo "（cluster 存在但未取得任何 instance describe——請查 \`data/scan-errors.log\`）"
+      fi
+    else
+      echo "⚠️ **alloydb-clusters.json 列出 cluster，但 alloydb-detail/ 沒有對應 describe 檔**——describe 可能失敗，"
+      echo "請查 \`data/scan-errors.log\`（此為資料缺口，不可當成「沒有 cluster」）。"
+    fi
+  } > "$DIGEST/alloydb-clusters.md"
+  echo "  alloydb-clusters.md  $(wc -c < "$DIGEST/alloydb-clusters.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 cluster／instance 時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 cluster 時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/alloydb-clusters.md"; then
+    echo "    ❌ 斷言失敗：AlloyDB cluster／instance 名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ AlloyDB 設定表產生成功（未出現「欄位無法解析」）"
+  fi
+  # network-facts.py 用的機器可讀投影：instance 層公開 IP × 授權外部網段（確定性可及性判定）。
+  # 無 instance describe（含 0 cluster）時寫 []，讓 network-facts 印「無 AlloyDB」而非誤判資料缺口。
+  if [ -d "$AD_DETAIL" ] && ls "$AD_DETAIL"/*-instance.json > /dev/null 2>&1; then
+    jq -s '[ .[] |
+      ((.name // "") | split("/")) as $p |
+      {
+        name: ($p | last),
+        cluster: (if ($p | length) >= 6 then $p[5] else "?" end),
+        region: (if ($p | length) >= 6 then $p[3] else "?" end),
+        instanceType: (.instanceType // null),
+        availabilityType: (.availabilityType // null),
+        enablePublicIp: (.networkConfig.enablePublicIp // false),
+        authorizedExternalNetworks: [ (.networkConfig.authorizedExternalNetworks // [])[] | .cidrRange // empty ],
+        psc: (has("pscInstanceConfig")),
+        nodeCount: (.readPoolConfig.nodeCount // null),
+        ipAddress: (.ipAddress // null)
+      } ]' "$AD_DETAIL"/*-instance.json > "$DIGEST/alloydb-instances.json"
+  else
+    echo "[]" > "$DIGEST/alloydb-instances.json"
+  fi
+else
+  echo "  alloydb-clusters.md  略過（無 db/alloydb-clusters.json，AlloyDB clusters list 查詢失敗或權限不足）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。
@@ -729,7 +838,7 @@ if python3 "$SKILL_DIR/scripts/network-facts.py"; then
   MADE=$((MADE + 1))
   NF="$DIGEST/network-facts.md"
   # 斷言：三個關聯區塊都要在（少任何一段代表關聯沒算出來，等於又把判斷丟回給 LLM）
-  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性" "無伺服器資源的網路路徑"; do
+  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性" "無伺服器資源的網路路徑" "AlloyDB 的實際可及性"; do
     if grep -q "$sec" "$NF"; then
       echo "    ✅ 網路事實：${sec}"
     else

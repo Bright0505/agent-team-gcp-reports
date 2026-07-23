@@ -16,7 +16,8 @@ model: opus
    **可直接引用為證據**。
    本支柱會用到的 digest：**`digest/network-facts.md`**（跨檔關聯的網路事實：防火牆規則的**實際暴露面**、
    VM 對外路徑、Cloud SQL 的實際可及性、**第四段「無伺服器資源的網路路徑」**——Cloud Run 的 Ingress
-   ＋VPC egress 歸屬，這些是確定性算出的結論，**必讀**）、
+   ＋VPC egress 歸屬、**第五段「AlloyDB 的實際可及性」**——公開 IP × 授權外部網段的暴露判定，
+   這些是確定性算出的結論，**必讀**）、
    **`digest/iam-policy.md`**（角色 → 成員總表，已標出基本角色與公開授權）、
    **`digest/gcs-buckets.md`**（值區設定總表：PAP／UBLA／版本控制／CMEK）、
    **`digest/bigquery-datasets.md`**（BigQuery dataset 存取控制總表：公開／匿名授權、location、CMEK；
@@ -26,7 +27,9 @@ model: opus
    **`digest/run-services.json`**（Cloud Run ingress／vpcAccess；本專案 API 未啟用時不存在）、
    **`digest/appengine-services.json`**（App Engine 服務層 ingress＝`networkSettings.ingressTrafficAllowed`）與
    **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector／network／env；未建立 App Engine 應用時兩者皆不存在）、
-   **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）。
+   **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）、
+   **`digest/alloydb-clusters.md`**（AlloyDB cluster／instance 設定總表：公開 IP／授權外部網段／CMEK／PSC／備份；
+   無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -44,7 +47,7 @@ model: opus
 | 官方核心原則 | 本流程如何評估 |
 |---|---|
 | Implement security by design | 由組態證據間接評估：防火牆的實際暴露面、IAM 最小權限、加密與 SSL 設定 |
-| Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 授權網路。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
+| Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 與 AlloyDB 的公開 IP／授權外部網段。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
 | Implement shift-left security | 屬 CI/CD 流程面，**唯讀掃描評估不到**，列入掃描範圍外 |
 | Implement preemptive cyber defense | Cloud Armor 安全政策、組織政策。**Security Command Center 需組織層權限，屬掃描範圍外** |
 | Use AI securely and responsibly | 專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
@@ -90,6 +93,12 @@ model: opus
 **資料保護**
 - Cloud Storage：`publicAccessPrevention` 是否 `enforced`、UBLA 是否啟用、有無 CMEK
 - Cloud SQL：public IP × `authorizedNetworks` × SSL 模式（三者一起看，判定見 network-facts.md）
+- **AlloyDB 對外暴露**（見 `digest/network-facts.md` 第五段與 `digest/alloydb-clusters.md`）：instance 層
+  `networkConfig.enablePublicIp` 是否開啟、`authorizedExternalNetworks[].cidrRange` 是否含 `0.0.0.0/0`
+  （公開 IP ＋ 授權 0.0.0.0/0 ＝全網際網路可連，屬高嚴重度，等同 Cloud SQL 的 authorizedNetworks 0.0.0.0/0，
+  network-facts 已算出判定，**不得降級**）；另看 cluster 是否使用 **CMEK**（`encryptionConfig.kmsKeyName`；
+  缺席＝Google 管理金鑰）與是否走 PSC／Private Services Access 私有連線。⚠️ 本專案掃描時無任何 cluster
+  （有效證據，非資料缺口），此項寫「本專案未建立 AlloyDB cluster」即可
 - **BigQuery dataset 存取控制**（見 `digest/bigquery-datasets.md`）：dataset 的 `access[]` 是否含
   **公開／匿名授權**（`iamMember: allUsers`＝網際網路任何人；`iamMember/specialGroup: allAuthenticatedUsers`
   ＝任何 Google 帳號）——這是 BigQuery 資料外洩的最高風險，等同 GCS 值區公開。另看資料所在 `location`
