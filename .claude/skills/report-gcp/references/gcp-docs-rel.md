@@ -24,6 +24,13 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [GKE cluster autoscaler](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler)
 - [GKE maintenance windows and exclusions](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/maintenance-windows-and-exclusions)
 - [Group unmanaged VMs together](https://docs.cloud.google.com/compute/docs/instance-groups/creating-groups-of-unmanaged-instances)
+- [About network isolation in GKE（私有叢集與 control plane 端點）](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/network-isolation)
+
+## 無伺服器網路依賴
+
+- [About instance autoscaling in Cloud Run（最小／最大執行個體）](https://docs.cloud.google.com/run/docs/about-instance-autoscaling)
+- [Configure Serverless VPC Access（connector 是對外連線的相依點）](https://docs.cloud.google.com/vpc/docs/serverless-vpc-access)
+- [Connect to a VPC network with Direct VPC egress](https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc)
 
 ## 網路韌性
 
@@ -37,6 +44,9 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Create schedules for disk snapshots](https://docs.cloud.google.com/compute/docs/disks/scheduled-snapshots)
 - [Backup and DR Service — Product overview](https://docs.cloud.google.com/backup-disaster-recovery/docs/concepts/backup-dr)
 - [Backup for GKE](https://docs.cloud.google.com/kubernetes-engine/docs/add-on/backup-for-gke/concepts/backup-for-gke)
+- [Filestore service tiers（BASIC 單一區域 vs ENTERPRISE／REGIONAL 區域級高可用）](https://docs.cloud.google.com/filestore/docs/service-tiers)
+- [Filestore backups](https://docs.cloud.google.com/filestore/docs/backups)
+- [Configure Filestore instance replication（跨區域災難復原）](https://docs.cloud.google.com/filestore/docs/configure-instance-replication)
 
 ## 負載平衡與健康檢查
 

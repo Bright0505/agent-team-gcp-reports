@@ -32,7 +32,9 @@ model: sonnet
    **`data/digest/` 有的檔案一律讀 digest，不要讀 `data/` 的原始版**——digest 是原始檔的確定性投影
    （以 jq 產生，保留全部證據欄位並通過欄位斷言），**可直接引用為證據**。
    本支柱另會用到 `digest/compute-instances.json`（機型、磁碟類型、preemptible）、
-   `digest/gcs-buckets.md`（儲存類別與生命週期）、`digest/backend-services.json`。
+   `digest/gcs-buckets.md`（儲存類別與生命週期）、`digest/backend-services.json`、
+   `digest/bigquery-datasets.md`（BigQuery dataset 的預設資料表過期治理──未設過期＝資料永久保留、
+   長期累積儲存費；本專案無 dataset 時該表會明寫「沒有任何 BigQuery dataset」）。
    其餘檔案（disks、snapshots、addresses、forwarding-rules、logging-buckets 等）讀 `data/` 原始檔。
    **要查哪些服務的定價，從 `data/inventory.md` 的資源數量表自動判斷**（見下方「定價查詢」），
    不要用人工預先指定的服務清單——不同專案用到的 GCP 服務不一樣，人工列表容易漏項。
@@ -69,6 +71,7 @@ bash .claude/skills/report-gcp/scripts/pricing-lookup.sh \
 | GKE 叢集 | `Kubernetes Engine` |
 | Cloud Run 服務 | `Cloud Run` |
 | Cloud Functions | `Cloud Functions` |
+| BigQuery dataset | `BigQuery` |
 
 **退出碼要接住、據以決定怎麼寫發現**：
 - `0`：查到 SKU，stdout 是精簡 JSON（`unitPriceUSD`／`usageUnit`／`skuId` 等），可直接引用為官方牌價。
@@ -114,6 +117,10 @@ bash .claude/skills/report-gcp/scripts/pricing-lookup.sh \
 - 值區儲存類別是否與存取頻率匹配
 - Cloud Logging 記錄保留期與匯出量（`_Default` 值區保留期、記錄擷取量）
 - Cloud NAT 流量費：高流量對 Google API 存取有無改用 Private Google Access
+- **BigQuery 儲存治理**（見 `digest/bigquery-datasets.md`）：dataset 是否設定**預設資料表過期**
+  （`defaultTableExpirationMs`；未設定＝資料表永久保留，冷資料持續計費）。BigQuery 儲存分為
+  active／long-term 兩級費率（90 天未改動自動轉 long-term、單價約半），過期治理與分區可控制長期成本。
+  ⚠️ 本專案掃描時無任何 dataset，此項寫「本專案未建立 BigQuery dataset」即可，不要憑空生成金額
 
 **成本治理**
 - **有無預算（budget）與門檻通知**（`digest/cost-signals.md` 已確定性判定）

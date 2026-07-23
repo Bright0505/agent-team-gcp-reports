@@ -38,6 +38,7 @@ cost-optimizer 專用。使用規則見 `gcp-docs-common.md`。
 - [Persistent disk snapshots](https://docs.cloud.google.com/compute/docs/disks/snapshots)
 - [Reserve a static external IP address](https://docs.cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address)
 - [Logging pricing and retention](https://docs.cloud.google.com/stackdriver/pricing)
+- [Optimize BigQuery storage for query performance and cost（含資料表過期治理）](https://docs.cloud.google.com/bigquery/docs/best-practices-storage)
 
 ## 定價頁（僅供人工對照／報告引用，即時單價改用 pricing-lookup.sh）
 

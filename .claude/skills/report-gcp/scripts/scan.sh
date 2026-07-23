@@ -190,9 +190,97 @@ run "compute/disks"            compute disks list "${P[@]}"
 run "compute/snapshots"        compute snapshots list "${P[@]}"
 run "compute/images"           compute images list --no-standard-images "${P[@]}"
 run "compute/gke-clusters"     container clusters list "${P[@]}"
+# 逐叢集 describe：list 拿不到 privateClusterConfig／masterAuthorizedNetworksConfig／
+# ipAllocationPolicy／networkConfig 等網路欄位，必須逐一 describe（比照下方 Cloud SQL 逐個 describe）。
+# 位置（region 或 zone）取自 list 結果的 .location（regional）或 .zone（zonal）；
+# `--location` 同時吃 region／zone 兩種，不必分流。
+mkdir -p "$DATA/compute/gke-detail"
+while IFS=$'\t' read -r gname gloc; do
+  [ -z "$gname" ] && continue
+  run "compute/gke-detail/$gname-describe" container clusters describe "$gname" --location "$gloc" "${P[@]}"
+done < <(jq -r '.[] | [.name, (.location // .zone // empty)] | @tsv' "$DATA/compute/gke-clusters.json" 2>/dev/null)
+
 # Cloud Run 不吃 `--region -`（會被當成 endpoint override 而報錯）；不給 --region 就是列全部區域
 run "compute/run-services"     run services list "${P[@]}"
+# 逐服務 describe：list 拿不到 ingress／vpcAccess（Direct VPC egress／connector）等網路欄位。
+# ⚠️ gcloud run services list --format=json 的實際輸出可能是 v1 Knative 風格（.metadata.name）
+#    也可能是 v2 風格（.name），故服務名用雙路 fallback；region 同理從
+#    .metadata.labels["cloud.googleapis.com/location"] 或 .region 取（Cloud Run 服務有區域性，
+#    describe 需帶 --region）。**本專案 Cloud Run API 未啟用，此段未經真實資料實測**——
+#    實際輸出命中哪一路 fallback、需不需要 --region，待日後有真實資料時回來核對。
+mkdir -p "$DATA/compute/run-detail"
+while IFS=$'\t' read -r rname rloc; do
+  [ -z "$rname" ] && continue
+  if [ -n "$rloc" ]; then
+    run "compute/run-detail/$rname-describe" run services describe "$rname" --region "$rloc" "${P[@]}"
+  else
+    run "compute/run-detail/$rname-describe" run services describe "$rname" "${P[@]}"
+  fi
+done < <(jq -r '.[] | [(.metadata.name // .name // empty), (.metadata.labels["cloud.googleapis.com/location"] // .region // empty)] | @tsv' "$DATA/compute/run-services.json" 2>/dev/null)
+
 run "compute/functions"        functions list "${P[@]}"
+# 逐函式 describe：list 拿不到 VPC connector／ingress 設定。Cloud Functions 的 .name 常是完整資源
+# 路徑（projects/.../locations/<region>/functions/<短名>）。先解析出 region 與短名，帶
+# --region＋短名 describe；解析不出 region 時退回用整個 .name 直接 describe（兩種都先嘗試）。
+# **本專案 Functions API 未啟用，此段未經真實資料實測**——實際哪一路可行待日後核對。
+mkdir -p "$DATA/compute/functions-detail"
+while IFS=$'\t' read -r fname floc fshort; do
+  [ -z "$fname" ] && continue
+  if [ -n "$floc" ]; then
+    run "compute/functions-detail/$fshort-describe" functions describe "$fshort" --region "$floc" "${P[@]}"
+  else
+    run "compute/functions-detail/$fshort-describe" functions describe "$fname" "${P[@]}"
+  fi
+done < <(jq -r '.[] | (.name // empty) as $n | ($n | split("/")) as $p | [$n, (if ($p|length) >= 4 then $p[3] else "" end), ($p | last)] | @tsv' "$DATA/compute/functions.json" 2>/dev/null)
+
+# App Engine（無伺服器運算；有 VPC connector／ingress 網路歸屬，性質接近 Cloud Run）。
+# 網路欄位分屬**兩個層級**（2026-07-23 查證官方 Admin API v1，勿沿用「都在 version 層」的舊假設）：
+#   ‧ Ingress 控制在 **service** 層：`networkSettings.ingressTrafficAllowed`
+#     （enum：INGRESS_TRAFFIC_ALLOWED_ALL／_INTERNAL_ONLY／_INTERNAL_AND_LB）→ `app services describe`
+#   ‧ VPC 出口／環境在 **version** 層：`vpcAccessConnector.{name,egressSetting}`、
+#     `network.{name,subnetworkName,instanceTag}`、`env`（standard／flexible）、`inboundServices[]`
+#     → `app versions describe <VER> --service <SVC>`
+# 故流程＝describe app → list services →（逐服務 describe 拿 ingress）→ list versions →（逐版本 describe 拿網路）。
+# ⚠️ 為什麼不用 run()（2026-07-23 本專案 本專案 實測）：對「未建立 App Engine 應用」的專案，
+#    `gcloud app describe` 回 **exit 1** ＋訊息「does not contain an App Engine application」。此訊息不符
+#    scan-gaps.md 的 NOT_FOUND 樣式，若走 run() 會被歸為 FAILED（資料缺口）——但這其實是「未設定／
+#    無此類資源」（有效證據），兩者結論相反、違反本專案鐵則。故本段自訂空判斷：偵測該訊息記為 EMPTY，
+#    其餘錯誤（API 未啟用／權限不足）才記 FAILED。app 存在後的 services／versions list 仍可安全走 run()。
+# ⚠️ 本專案未建立 App Engine 應用，service／version 層的網路欄位路徑**未經真實資料驗證**（同 Cloud Run
+#    情形）；service 名／version id 的 jq 取法用雙路 fallback，digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+mkdir -p "$DATA/appengine"
+AE_APP="$DATA/appengine/app.json"
+AE_ERR="$(mktemp)"
+if gcloud app describe --project="$PROJECT" --format=json > "$AE_APP" 2>"$AE_ERR"; then
+  echo "  ok    appengine/app"
+  run "appengine/services" app services list "${P[@]}"
+  # 逐服務 describe：ingress 控制（networkSettings）在 service 層，list 拿不到
+  mkdir -p "$DATA/appengine/service-detail"
+  while IFS= read -r aesvc; do
+    [ -z "$aesvc" ] && continue
+    run "appengine/service-detail/$aesvc-describe" app services describe "$aesvc" "${P[@]}"
+  done < <(jq -r '.[]? | (.id // (.name | split("/") | last) // empty)' "$DATA/appengine/services.json" 2>/dev/null)
+  run "appengine/versions" app versions list "${P[@]}"
+  # 逐版本 describe：VPC connector／network／env／inboundServices 在 version 層，list 拿不到完整組態。
+  # service 名與 version id 用雙路 fallback（頂層 .service／.id 為主，退回巢狀 .version.service／.version.id）。
+  mkdir -p "$DATA/appengine/version-detail"
+  while IFS=$'\t' read -r aesvc aever; do
+    [ -z "$aesvc" ] && continue
+    [ -z "$aever" ] && continue
+    run "appengine/version-detail/$aesvc-$aever-describe" app versions describe "$aever" --service "$aesvc" "${P[@]}"
+  done < <(jq -r '.[]? | [(.service // .version.service // empty), (.id // .version.id // empty)] | @tsv' "$DATA/appengine/versions.json" 2>/dev/null)
+else
+  if grep -qiE 'does not contain an App Engine application|NOT_FOUND|not found' "$AE_ERR"; then
+    echo "  empty appengine/app (回空結果＝本專案未建立 App Engine 應用)"
+    echo "EMPTY: appengine/app :: gcloud app describe" >> "$ERRLOG"
+  else
+    echo "  fail  appengine/app (見 scan-errors.log)"
+    cat "$AE_ERR" >> "$ERRLOG"
+    echo "FAILED: appengine/app :: reason=$(head -1 "$AE_ERR" | tr -d '\n') :: gcloud app describe" >> "$ERRLOG"
+  fi
+  rm -f "$AE_APP"
+fi
+rm -f "$AE_ERR"
 
 echo "=== 負載平衡與邊緣 ==="
 run "lb/forwarding-rules"    compute forwarding-rules list "${P[@]}"
@@ -217,10 +305,71 @@ run "db/bigtable-instances" bigtable instances list "${P[@]}"
 run "db/firestore-databases" firestore databases list "${P[@]}"
 run "db/redis-instances"    redis instances list --region - "${P[@]}"
 
+echo "=== 資料分析（BigQuery）==="
+# BigQuery 唯讀掃描：用原生 bq CLI（bq ls／bq show），不用 gcloud alpha bq，因此無法套用上方的 run()
+# （run() 固定呼叫 gcloud）。以下為本節專屬的唯讀 list＋逐一 describe 區塊。
+# ⚠️ 為什麼是 bq 而非 gcloud alpha bq（2026-07-23 實測）：`gcloud alpha bq datasets list/describe`
+#    會對 quota 專案要求 serviceusage.services.use 權限，建議的唯讀身分（roles/viewer + securityReviewer
+#    + recommender.viewer + billing.viewer）不一定具備——實測對非成員專案直接回 USER_PROJECT_DENIED。
+#    bq CLI 走不同的配額機制，唯讀身分即可用；且 bq show 的 JSON 直接對應 BigQuery REST v2 Datasets
+#    資源。欄位路徑（access[] 的 iamMember/specialGroup、location、defaultEncryptionConfiguration、
+#    defaultTableExpirationMs）已用公開 dataset（bigquery-public-data:samples）實測驗證。
+# ⚠️ bq 與 gcloud 的空值表現不同：dataset 為 0 時 `bq ls` 印**空字串**（非 gcloud 的 `[]`），
+#    故下方自訂空判斷（空檔補成 `[]` 再判長度），不能沿用 run() 的空判斷。
+# list 只回索引（datasetReference／location），拿不到 access[]／CMEK，故必須逐一 bq show。
+mkdir -p "$DATA/bigquery/dataset-detail"
+BQ_DS="$DATA/bigquery/datasets.json"
+BQ_ERR="$(mktemp)"
+if bq ls --datasets --format=prettyjson --project_id="$PROJECT" > "$BQ_DS" 2>"$BQ_ERR"; then
+  [ -s "$BQ_DS" ] || echo "[]" > "$BQ_DS"
+  BQ_N="$(jq -r 'length' "$BQ_DS" 2>/dev/null || echo 0)"
+  if [ "${BQ_N:-0}" -eq 0 ]; then
+    echo "  empty bigquery/datasets (回空結果＝本專案無 BigQuery dataset)"
+    echo "EMPTY: bigquery/datasets :: bq ls --datasets" >> "$ERRLOG"
+  else
+    echo "  ok    bigquery/datasets（${BQ_N} 個）"
+    while IFS= read -r dsid; do
+      [ -z "$dsid" ] && continue
+      dstmp="$(mktemp)"
+      if bq show --format=prettyjson "$PROJECT:$dsid" > "$DATA/bigquery/dataset-detail/$dsid-describe.json" 2>"$dstmp"; then
+        echo "  ok    bigquery/dataset-detail/$dsid"
+      else
+        echo "  fail  bigquery/dataset-detail/$dsid (見 scan-errors.log)"
+        cat "$dstmp" >> "$ERRLOG"
+        echo "FAILED: bigquery/dataset-detail/$dsid :: reason=$(head -1 "$dstmp" | tr -d '\n') :: bq show $PROJECT:$dsid" >> "$ERRLOG"
+        rm -f "$DATA/bigquery/dataset-detail/$dsid-describe.json"
+      fi
+      rm -f "$dstmp"
+    done < <(jq -r '.[].datasetReference.datasetId // empty' "$BQ_DS" 2>/dev/null)
+  fi
+else
+  echo "  fail  bigquery/datasets (見 scan-errors.log)"
+  cat "$BQ_ERR" >> "$ERRLOG"
+  echo "FAILED: bigquery/datasets :: reason=$(head -1 "$BQ_ERR" | tr -d '\n') :: bq ls --datasets --project_id=$PROJECT" >> "$ERRLOG"
+  rm -f "$BQ_DS"
+fi
+rm -f "$BQ_ERR"
+
 echo "=== 儲存 ==="
 # GCS 一次呼叫就含 iamConfiguration（PAP／UBLA）／versioning／lifecycle／encryption，
 # 不需要逐 bucket 分多次查詢。
 run "storage/buckets" storage buckets list "${P[@]}"
+# Filestore（受管 NFS 檔案儲存；概念上與 Cloud Storage 同屬儲存類，故放本段）。
+# ⚠️ 位置查法（2026-07-23 查證 gcloud reference）：Filestore 是區域性資源，但 `filestore instances
+#    list` 在**省略位置旗標時「uses all locations by default」**，預設就跨全部 zone／region 列出，
+#    **不需要** Redis 那種 `--region -` 萬用查詢。且 `list --format=json` 已回**完整 Instance 資源**
+#    （含 networks[]／fileShares[]／tier／state），不像 Cloud Run 要逐一 describe 才有網路欄位，
+#    故本段只需一次 list、不另開 describe 迴圈。
+# ⚠️ 為什麼可以走標準 run()（與 App Engine 不同，2026-07-23 本專案 本專案 實測）：
+#    本專案 file.googleapis.com 未啟用，`filestore instances list` 回**標準的** SERVICE_DISABLED
+#    （「Cloud Filestore API has not been used ... before or it is disabled」），這**符合** run() 的
+#    FAILED 分類（→ digest 的 scan-gaps.md 正確歸為「資料缺口：API 未啟用」）；API 啟用但無執行個體時
+#    gcloud 回標準 `[]`（→ EMPTY／未設定）。兩種空狀態都遵循標準 gcloud 慣例，無 App Engine 那種需要
+#    特殊比對的錯誤訊息，故直接用 run()，不必自訂空判斷。
+# ⚠️ Filestore **無公開 IP 的概念**：只能透過同 VPC／VPC Peering／Private Service Access 存取
+#    （networks[].network＝綁定的 VPC、networks[].reservedIpRange＝保留網段、connectMode＝連線模式）。
+#    欄位路徑本專案無真實資料驗證（API 未啟用），digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+run "storage/filestore-instances" filestore instances list "${P[@]}"
 
 echo "=== 維運與偵測 ==="
 run "ops/logging-sinks"      logging sinks list "${P[@]}"
@@ -332,7 +481,7 @@ jqlen() {  # $1=檔案  $2=jq 運算式  → 長度（檔不存在/錯誤時 0�
 
 write_inventory() {
   local INV="$DATA/inventory.md"
-  local n_net n_sub n_fw n_vm n_mig n_ig n_disk n_snap n_gke n_run n_fn n_lb n_be n_sql n_bucket n_sa n_alert n_zone
+  local n_net n_sub n_fw n_vm n_mig n_ig n_disk n_snap n_gke n_run n_fn n_ae n_lb n_be n_sql n_bq n_bucket n_fs n_sa n_alert n_zone
   n_net="$(jqlen "$DATA/network/networks.json" '.')"
   n_sub="$(jqlen "$DATA/network/subnets.json" '.')"
   n_fw="$(jqlen "$DATA/network/firewall-rules.json" '.')"
@@ -344,10 +493,13 @@ write_inventory() {
   n_gke="$(jqlen "$DATA/compute/gke-clusters.json" '.')"
   n_run="$(jqlen "$DATA/compute/run-services.json" '.')"
   n_fn="$(jqlen "$DATA/compute/functions.json" '.')"
+  n_ae="$(jqlen "$DATA/appengine/services.json" '.')"
   n_lb="$(jqlen "$DATA/lb/forwarding-rules.json" '.')"
   n_be="$(jqlen "$DATA/lb/backend-services.json" '.')"
   n_sql="$(jqlen "$DATA/db/sql-instances.json" '.')"
+  n_bq="$(jqlen "$DATA/bigquery/datasets.json" '.')"
   n_bucket="$(jqlen "$DATA/storage/buckets.json" '.')"
+  n_fs="$(jqlen "$DATA/storage/filestore-instances.json" '.')"
   n_sa="$(jqlen "$DATA/global/iam-service-accounts.json" '.')"
   n_alert="$(jqlen "$DATA/ops/monitoring-policies.json" '.')"
   n_zone="$(jqlen "$DATA/ops/dns-zones.json" '.')"
@@ -381,10 +533,13 @@ write_inventory() {
     echo "| GKE 叢集 | $n_gke |"
     echo "| Cloud Run 服務 | $n_run |"
     echo "| Cloud Functions | $n_fn |"
+    echo "| App Engine 服務 | $n_ae |"
     echo "| 轉送規則（負載平衡前端） | $n_lb |"
     echo "| 後端服務 | $n_be |"
     echo "| Cloud SQL 執行個體 | $n_sql |"
+    echo "| BigQuery dataset | $n_bq |"
     echo "| Cloud Storage 值區 | $n_bucket |"
+    echo "| Filestore 執行個體 | $n_fs |"
     echo "| 服務帳戶 | $n_sa |"
     echo "| Cloud Monitoring 告警政策 | $n_alert |"
     echo "| Cloud DNS 區域 | $n_zone |"
