@@ -268,9 +268,21 @@ if gcloud app describe --project="$PROJECT" --format=json > "$AE_APP" 2>"$AE_ERR
     [ -z "$aesvc" ] && continue
     [ -z "$aever" ] && continue
     run "appengine/version-detail/$aesvc-$aever-describe" app versions describe "$aever" --service "$aesvc" "${P[@]}"
+    # 迴圈這裡就已知 service 名（--service "$aesvc"），把它與 version 名注入 JSON 供 digest 回填：
+    # version describe 的輸出若只有 .id 而無全路徑 .name（apps/.../services/SVC/versions/VER），
+    # digest 從 .name 推 service 會得到「?」、network-facts 第 4 段該列的服務關聯就丟了。
+    # 注入 _scan_service／_scan_version（不覆蓋任何 gcloud 原欄位，只補確定性的權威來源）避免此問題。
+    # run() 只在成功時留檔，故先判存在再注入（本機 jq 處理 data/ 檔，不碰 GCP）。
+    AEVF="$DATA/appengine/version-detail/$aesvc-$aever-describe.json"
+    if [ -f "$AEVF" ]; then
+      jq --arg svc "$aesvc" --arg ver "$aever" '. + {_scan_service: $svc, _scan_version: $ver}' \
+         "$AEVF" > "$AEVF.tmp" 2>/dev/null && mv "$AEVF.tmp" "$AEVF" || rm -f "$AEVF.tmp"
+    fi
   done < <(jq -r '.[]? | [(.service // .version.service // empty), (.id // .version.id // empty)] | @tsv' "$DATA/appengine/versions.json" 2>/dev/null)
 else
-  if grep -qiE 'does not contain an App Engine application|NOT_FOUND|not found' "$AE_ERR"; then
+  # 收斂成 App Engine 專屬訊息＋精確大寫 NOT_FOUND：裸 `not found`＋`-i` 會把任何含「not found」
+  # 的錯誤（例如打錯專案 ID）誤歸成「未建立 App Engine＝未設定」——那是相反的結論，故移除。
+  if grep -qE 'does not contain an App Engine application|NOT_FOUND' "$AE_ERR"; then
     echo "  empty appengine/app (回空結果＝本專案未建立 App Engine 應用)"
     echo "EMPTY: appengine/app :: gcloud app describe" >> "$ERRLOG"
   else

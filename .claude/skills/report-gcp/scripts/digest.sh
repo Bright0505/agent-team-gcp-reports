@@ -133,13 +133,28 @@ fi
 #      snake/camel 教訓）。沿用同一套防呆：抓不到 ingress／name 就印「⚠️ 欄位無法解析」並讓斷言
 #      FAIL，**絕不可默默印「未設定」**——寧可斷言失敗逼人發現路徑錯了。ingress／vpcAccess
 #      用雙路 fallback：v2（頂層 .ingress、.template.vpcAccess）與 v1 Knative（annotations）都試。
+# ⚠️ ingress **必須正規化成單一 v2 詞彙**：v1 Knative annotation 的值是小寫短詞
+#    （"all"／"internal"／"internal-and-cloud-load-balancing"），但下游 network-facts.py 與
+#    build-diagram.js 只認 v2 enum（INGRESS_TRAFFIC_ALL 等）。不正規化的話，v1 風格、對外開放
+#    （"all"）的服務不會被判成暴露面——確定性腳本靜默漏標暴露面，是本專案最不能接受的錯。
+#    故此處把 v1 值對應成 v2；v2 值原樣保留；無法辨識的值（含 null→「欄位無法解析」）保留原字串，
+#    落到既有防呆，絕不靜默吞掉。
+# ⚠️ ingress 缺席（v1／v2 皆取不到）＝印「⚠️ 欄位無法解析」讓斷言 FAIL，這與下方 App Engine
+#    「缺席＝合法預設 ALL、不 FAIL」是**刻意相反**的處理：Cloud Run v2 的 ingress 一定有值，
+#    缺席代表 schema 假設錯了，寧可 loud-fail 逼人核對；App Engine 的 networkSettings 缺席則是
+#    官方定義的合法預設（見該段註解）。方向不同是有意的，不是漏改。
 RUN_DETAIL="$DATA/compute/run-detail"
 if [ -d "$RUN_DETAIL" ] && ls "$RUN_DETAIL"/*-describe.json > /dev/null 2>&1; then
   jq -s '[.[] | {
     name: (.metadata.name // .name // "⚠️ 欄位無法解析"),
-    ingress: (.ingress
-              // .metadata.annotations["run.googleapis.com/ingress"]
-              // "⚠️ 欄位無法解析"),
+    ingress: ((.ingress
+               // .metadata.annotations["run.googleapis.com/ingress"]
+               // "⚠️ 欄位無法解析") as $raw |
+              {
+                "all": "INGRESS_TRAFFIC_ALL",
+                "internal": "INGRESS_TRAFFIC_INTERNAL_ONLY",
+                "internal-and-cloud-load-balancing": "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+              }[$raw] // $raw),
     vpcAccess: {
       connector: (.template.vpcAccess.connector
                   // .spec.template.metadata.annotations["run.googleapis.com/vpc-access-connector"]
@@ -174,6 +189,10 @@ fi
 # 2nd gen 底層即 Cloud Run，用 serviceConfig.{ingressSettings,vpcConnector}；1st gen 是舊 schema
 # （頂層 ingressSettings／vpcConnector）。兩代欄位名不同，分開判斷並在 generation 欄註明是哪一代。
 # ⚠️ 本專案 Functions API 未啟用，欄位路徑**未經真實資料驗證**；同樣加「欄位無法解析」防呆。
+# ⚠️ Functions 的 ingress（ingressSettings）值域是 ALLOW_ALL／ALLOW_INTERNAL_ONLY／ALLOW_INTERNAL_AND_GCLB，
+#    **與 Cloud Run 的 INGRESS_TRAFFIC_* enum 不同**，故此處不套用 Cloud Run 的正規化對應。目前
+#    **Cloud Functions 尚未納入 network-facts.py 的對外開放判定**（serverless_paths 只吃 runs／App Engine，
+#    不吃 functions）；日後要納入時，記得這裡的 ingress 值域與 Cloud Run 不同，需在判定端另立對應或先正規化。
 FN_DETAIL="$DATA/compute/functions-detail"
 if [ -d "$FN_DETAIL" ] && ls "$FN_DETAIL"/*-describe.json > /dev/null 2>&1; then
   jq -s '[.[] |
@@ -253,6 +272,9 @@ fi
 #    **服務名**（.id／.name 皆解析不出來＝gcloud schema 變了→印「⚠️ 欄位無法解析」讓斷言 FAIL）。
 #    ingress 不當防呆錨點：官方定義 networkSettings 缺席＝預設 INGRESS_TRAFFIC_ALLOWED_ALL（對外開放），
 #    這是「有意義的缺席」而非解析失敗（同 GKE 非私有叢集欄位缺席的教訓），故缺席時補上帶標註的預設值。
+# ⚠️ 這裡「ingress 缺席＝合法預設 ALL、不 FAIL」與上方 Cloud Run／Functions「ingress 缺席＝欄位無法解析→
+#    斷言 FAIL」是**刻意相反**的：App Engine 官方定義 networkSettings 缺席就是預設對外開放（合法預設），
+#    而 Cloud Run v2 的 ingress 一定有值、缺席代表 schema 假設錯了。兩段方向不同是有意為之，不是漏改。
 AE_SVC_DETAIL="$DATA/appengine/service-detail"
 if [ -d "$AE_SVC_DETAIL" ] && ls "$AE_SVC_DETAIL"/*-describe.json > /dev/null 2>&1; then
   jq -s '[.[] | {
@@ -280,15 +302,18 @@ fi
 # 來源：appengine/version-detail/*-describe.json（scan.sh 逐版本 describe）。
 # 必留證據：vpcAccessConnector.{name,egressSetting}（Serverless VPC Access 出口＝連進哪個 VPC）、
 #           network.{name,subnetworkName}（Flexible 環境的直接網路綁定）、env（standard／flexible）。
-# service／version 名從資源全名 .name（apps/APP/services/SVC/versions/VER）推導；env 依官方預設 standard。
-# ⚠️ 未經真實資料驗證；防呆錨點是版本名（.id／.name 皆無→「⚠️ 欄位無法解析」→斷言 FAIL）。
+# service／version 名優先從資源全名 .name（apps/APP/services/SVC/versions/VER）推導；describe 只回 .id
+# 而無全路徑 .name 時，退回 scan.sh 注入的 _scan_service／_scan_version（掃描迴圈已知的權威來源，
+# 見 scan.sh 版本 describe 段），最後才落到「?」／「欄位無法解析」——確保 service 不會因缺全路徑變「?」
+# 而丟掉 network-facts 第 4 段的服務關聯。env 依官方預設 standard。
+# ⚠️ 未經真實資料驗證；防呆錨點是版本名（.id／_scan_version／.name 皆無→「⚠️ 欄位無法解析」→斷言 FAIL）。
 AE_VER_DETAIL="$DATA/appengine/version-detail"
 if [ -d "$AE_VER_DETAIL" ] && ls "$AE_VER_DETAIL"/*-describe.json > /dev/null 2>&1; then
   jq -s '[.[] |
     ((.name // "") | split("/")) as $p |
     {
-      service: (if ($p | length) >= 4 then $p[3] else "?" end),
-      version: (.id // (if ($p | length) >= 1 then ($p | last) else "" end) // "⚠️ 欄位無法解析"),
+      service: ((if ($p | length) >= 4 then $p[3] else null end) // ._scan_service // "?"),
+      version: (.id // ._scan_version // (if ($p | length) >= 1 then ($p | last) else null end) // "⚠️ 欄位無法解析"),
       env: (.env // "standard"),
       servingStatus: (.servingStatus // null),
       vpcConnector: (.vpcAccessConnector.name // null),
