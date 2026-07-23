@@ -15,6 +15,8 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Cloud SQL maintenance](https://docs.cloud.google.com/sql/docs/mysql/maintenance)
 - [Cloud SQL read replicas](https://docs.cloud.google.com/sql/docs/postgres/replication/create-replica)
 - [Memorystore for Redis RDB snapshots](https://docs.cloud.google.com/memorystore/docs/redis/rdb-snapshots)
+- [Memorystore for Memcached overview（高可用：自動跨可用區分布節點）](https://docs.cloud.google.com/memorystore/docs/memcached/memcached-overview)
+- [Memorystore for Memcached best practices（節點數與可用區分布＝容錯）](https://docs.cloud.google.com/memorystore/docs/memcached/best-practices)
 
 ## 運算韌性
 
@@ -47,6 +49,9 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Filestore service tiers（BASIC 單一區域 vs ENTERPRISE／REGIONAL 區域級高可用）](https://docs.cloud.google.com/filestore/docs/service-tiers)
 - [Filestore backups](https://docs.cloud.google.com/filestore/docs/backups)
 - [Configure Filestore instance replication（跨區域災難復原）](https://docs.cloud.google.com/filestore/docs/configure-instance-replication)
+- [AlloyDB high availability overview（availabilityType、read pool 冗餘、區域級故障轉移）](https://docs.cloud.google.com/alloydb/docs/high-availability)
+- [AlloyDB data backup and recovery overview（automated backup ＋ continuous backup／PITR）](https://docs.cloud.google.com/alloydb/docs/backup/overview)
+- [AlloyDB cross-region replication overview（跨區域災難復原）](https://docs.cloud.google.com/alloydb/docs/cross-region-replication/about-cross-region-replication)
 
 ## 負載平衡與健康檢查
 

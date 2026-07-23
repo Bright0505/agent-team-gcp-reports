@@ -163,11 +163,14 @@ def firewall_exposure(out, fw, vms):
 
     out.append("\n> 註：VM 無外部 IP 不代表完全不可達——經由外部負載平衡器（`lb/forwarding-rules.json`）")
     out.append("> 的流量會以 Google 前端的來源位址到達後端，需搭配 `lb/backend-services.json` 一起判斷。")
-    out.append("\n> 註：Filestore（受管 NFS）等透過 Private Service Access／VPC Peering 連接的儲存資源")
-    out.append("> **沒有公開 IP 的概念**，不會出現在上面的網際網路暴露判定裡——其可及性完全取決於綁定 VPC")
-    out.append("> 的**內部路由與防火牆**，以及 NFS 匯出選項（`nfsExportOptions`：哪些網段能掛載、讀寫或唯讀）。")
-    out.append("> 因此 Filestore 不另立跨檔關聯段落（其 VPC 綁定是單檔即可得的事實，無需跨檔比對）；")
-    out.append("> 若專案有 Filestore，綁定的 VPC／保留網段／連線模式／NFS 匯出控制見 `data/digest/filestore-instances.md`。")
+    out.append("\n> 註：Filestore（受管 NFS）、Memorystore（Redis／Memcached）等透過 Private Service Access／")
+    out.append("> VPC Peering 連接的資源**沒有公開 IP 的概念**，不會出現在上面的網際網路暴露判定裡——其可及性完全")
+    out.append("> 取決於綁定 VPC 的**內部路由與防火牆**（Filestore 另加 NFS 匯出選項 `nfsExportOptions`：哪些網段能")
+    out.append("> 掛載、讀寫或唯讀；Memorystore 則綁定於 `authorizedNetwork` 這個單一 VPC）。")
+    out.append("> 因此這些資源不另立跨檔關聯段落（其 VPC 綁定是單檔即可得的事實，無需跨檔比對）；")
+    out.append("> 若專案有 Filestore，綁定的 VPC／保留網段／連線模式／NFS 匯出控制見 `data/digest/filestore-instances.md`；")
+    out.append("> 若有 Memorystore Memcached，綁定 VPC（authorizedNetwork）／可用區分布（zones）／節點數見")
+    out.append("> `data/digest/memcached-instances.md`。")
 
 
 def vm_paths(out, vms, subnets, routers):
@@ -270,6 +273,62 @@ def sql_reachability(out, sqls):
             f"{'啟用' if bkp.get('pointInTimeRecoveryEnabled') or bkp.get('binaryLogEnabled') else '未啟用'} | "
             f"{verdict} |"
         )
+
+
+def alloydb_reachability(out, insts):
+    """第五段：AlloyDB instance 的實際可及性（公開 IP × 授權外部網段）。
+
+    AlloyDB 與 Cloud SQL 高度類似——對外暴露面看 instance 層的 enablePublicIp × authorizedExternalNetworks：
+      公開 IP 關閉 ＝ 只能經 VPC（Private Services Access）／PSC 私有連線，不構成網際網路暴露；
+      公開 IP 開啟 ＋ 授權 0.0.0.0/0 ＝ 全網際網路可連（高嚴重度，不得降級）。
+    這個 deterministic 判定跟 Cloud SQL 一樣要算成結論、不交給 LLM（否則會被降級）；故單獨成段，
+    不併入 Filestore 那種「單檔事實」——差別在這裡有「公開 IP × 授權網段 → 嚴重度」的推導。
+    資料來源是 digest/alloydb-instances.json（instance 層投影）；insts 為 None 代表該檔不存在。
+    """
+    out.append("\n## 5. AlloyDB 的實際可及性\n")
+    if insts is None:
+        out.append("本專案沒有 AlloyDB cluster，或 AlloyDB clusters list 查詢失敗（`digest/alloydb-instances.json` 不存在）。")
+        return
+    if not insts:
+        out.append("本專案沒有任何 AlloyDB instance（AlloyDB API 已啟用但未建立 cluster／instance＝有效證據，非資料缺口）。")
+        return
+    # 哨兵：digest.sh 在「有 cluster 但 instance describe 全部失敗」時寫入 [{"_gap": ...}]，代表資料缺口。
+    # 這與空 []（0 cluster＝有效證據）是相反結論，必須分開印，不可誤報成「沒有任何 instance」而沉默低報安全結論。
+    if isinstance(insts, list) and insts and isinstance(insts[0], dict) and insts[0].get("_gap"):
+        out.append("⚠️ **有 AlloyDB cluster 但 instance 組態查詢失敗（instance describe 失敗）＝資料缺口**，")
+        out.append("無法評估其對外可及性（公開 IP × 授權外部網段）；詳見 `data/scan-errors.log` 與 `digest/scan-gaps.md`。")
+        out.append("**不可**據此斷言「沒有任何 instance」——那是相反的結論。")
+        return
+    out.append("公開 IP × 授權外部網段 × 可用性**一起看**：公開 IP 關閉 ＝ 僅私有（VPC／PSC）連線；")
+    out.append("公開 IP 開啟 ＋ 授權 `0.0.0.0/0` ＝ 全網際網路可連，屬高嚴重度。`READ_POOL` 型別的節點數")
+    out.append("代表讀取冗餘；`availabilityType=REGIONAL` 才是跨可用區高可用。\n")
+    out.append("| Instance | Cluster | 型別 | 可用性 | 公開 IP | 授權外部網段 | PSC | read pool 節點 | 判定 |")
+    out.append("|---|---|---|---|---|---|---|---|---|")
+    for db in insts:
+        pub = db.get("enablePublicIp")
+        authnets = db.get("authorizedExternalNetworks") or []
+        open_world = "0.0.0.0/0" in authnets
+        psc = "啟用" if db.get("psc") else "未啟用"
+        nc = db.get("nodeCount")
+        if pub and open_world:
+            verdict = "**[高] 公開 IP ＋ 授權 0.0.0.0/0 ＝ 全網際網路可連**"
+        elif pub and authnets:
+            verdict = f"公開 IP，限 {len(authnets)} 個授權網段"
+        elif pub:
+            verdict = "有公開 IP 但無授權網段（無外部來源可連）"
+        else:
+            verdict = "僅私有（VPC／PSC）連線"
+        out.append(
+            f"| `{db.get('name')}` | {db.get('cluster') or '?'} | {db.get('instanceType') or '?'} | "
+            f"{db.get('availabilityType') or '?'} | {'**是**' if pub else '否'} | "
+            f"{('**' + ', '.join(authnets) + '**') if open_world else (', '.join(authnets) or '無')} | "
+            f"{psc} | {nc if nc is not None else '—'} | {verdict} |"
+        )
+    out.append("")
+    out.append("> AlloyDB 走 Private Services Access／Private Service Connect 連進 VPC；綁定的 VPC／保留網段／")
+    out.append("> 備份（automated＋continuous）／CMEK 見 `data/digest/alloydb-clusters.md`。")
+    out.append("> ⚠️ AlloyDB 的 `networkConfig`／`instanceType`／`availabilityType` 欄位路徑尚未經真實資料驗證")
+    out.append("> （本專案無 cluster），引用前對回 `data/digest/alloydb-instances.json` 與原始 describe 檔確認。")
 
 
 def serverless_paths(out, runs, connectors, ae_services, ae_versions):
@@ -439,11 +498,15 @@ def main():
     connectors = load("network", "vpc-connectors.json") or []
     ae_services = load("digest", "appengine-services.json")
     ae_versions = load("digest", "appengine-versions.json")
+    # AlloyDB：alloydb 為 None 代表 digest/alloydb-instances.json 不存在（clusters list 失敗），
+    # 為 [] 代表 API 已啟用但無 cluster／instance（有效證據）。alloydb_reachability 兩者都優雅處理。
+    alloydb = load("digest", "alloydb-instances.json")
 
     firewall_exposure(out, fw, vms)
     vm_paths(out, vms, subnets, routers)
     sql_reachability(out, sqls)
     serverless_paths(out, runs, connectors, ae_services, ae_versions)
+    alloydb_reachability(out, alloydb)
 
     os.makedirs(DIGEST, exist_ok=True)
     path = os.path.join(DIGEST, "network-facts.md")
