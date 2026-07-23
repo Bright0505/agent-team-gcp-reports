@@ -969,6 +969,74 @@ else
   echo "  dataproc-clusters.md  略過（無 dataproc/clusters-all.json，Dataproc API 未啟用＝資料缺口，見 scan-gaps.md）"
 fi
 
+# ── Vertex AI Endpoint（對外暴露／VPC 歸屬／CMEK）總表 ───────────────────
+# 來源：vertex/endpoints-all.json（scan.sh 逐 active region 跑 `ai endpoints list` 後合併；list 已回完整 Endpoint
+#      資源，含 network／privateServiceConnectConfig／encryptionSpec，比照 Dataproc 不需逐一 describe）。
+# 安全重點（見 gcp-docs-sec.md「Vertex AI Endpoint 對外暴露與加密」）——聚焦**單一核心面：端點對外暴露**：
+#   公開端點判定：`network`（VPC peering／Private Service Access）與 `privateServiceConnectConfig`（PSC）**互斥**，
+#     **兩者皆無＝公開端點（暴露面）**——有公開 REST/gRPC 端點，網際網路可及。本投影**保守判定**：只有明確走
+#     network（VPC peering）或 PSC（enablePrivateServiceConnect=true）才算私有，其餘一律標「**公開端點（暴露面）**」
+#     （偏向過度回報，絕不漏報，比照 Dataproc internalIpOnly／Dataflow ipConfiguration）。
+#   VPC 歸屬：`network`（走 VPC peering 時綁定的 VPC 完整路徑）；CMEK：`encryptionSpec.kmsKeyName`。
+# ⚠️ 空值語意：vertex/endpoints-all.json **不存在**＝endpoints list 未執行（API 未啟用；scan.sh 已把「API 未啟用」
+#    記成資料缺口 FAILED，見 scan-gaps.md）→ 本段優雅略過；存在但為 `[]`＝API 啟用但無 endpoint（有效證據）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 aiplatform.googleapis.com 未啟用，list 實跑 0 次，同 Dataproc 等）；
+#    僅依官方 Vertex AI v1 projects.locations.endpoints schema 撰寫。防呆錨點：有 endpoint 但 `.name` 解析不出來
+#    ＝路徑錯，印「⚠️ 欄位無法解析」讓斷言 FAIL，**絕不可默默印「未設定」**。camelCase／snake_case 雙接
+#    （privateServiceConnectConfig／private_service_connect_config、encryptionSpec／encryption_spec 等）——
+#    Vertex gcloud 輸出的大小寫無真實資料可證，比照 GCS 值區雙接防呆。
+VX_SRC="$DATA/vertex/endpoints-all.json"
+if [ -f "$VX_SRC" ]; then
+  {
+    echo "# Vertex AI Endpoint 對外暴露／VPC 歸屬／CMEK 總表"
+    echo ""
+    echo "來源：\`data/vertex/endpoints-all.json\`（各 active region 的 \`gcloud ai endpoints list\` 合併；list 已回完整"
+    echo "Endpoint 資源，含 \`network\`／\`privateServiceConnectConfig\`／\`encryptionSpec\`）。此表為其確定性投影。"
+    echo ""
+    echo "安全重點：**端點對外暴露**——\`network\`（VPC peering）與 \`privateServiceConnectConfig\`（PSC）**互斥**，"
+    echo "**兩者皆無＝公開端點**（有公開 REST/gRPC 端點＝資料與模型外洩面）。本表保守判定：僅明確走 VPC peering 或"
+    echo "PSC 才算私有，其餘一律標暴露面。另看 **VPC 歸屬**（\`network\`）與 **CMEK**（\`encryptionSpec.kmsKeyName\`）。"
+    echo ""
+    VX_N="$(jq -r 'length' "$VX_SRC" 2>/dev/null || echo 0)"
+    if [ "${VX_N:-0}" -eq 0 ]; then
+      echo "**本專案沒有任何 Vertex AI Endpoint**（Vertex AI API 已啟用但各 active region 的 endpoints list 皆回空＝有效證據，不是資料缺口）。"
+    else
+      echo "| Endpoint ID | 顯示名稱 | 區域 | 對外暴露 | VPC 歸屬（peering） | PSC | CMEK |"
+      echo "|---|---|---|---|---|---|---|"
+      jq -r '
+        .[] |
+        (.name // "⚠️ 欄位無法解析") as $rawname |
+        (if $rawname == "⚠️ 欄位無法解析" then "⚠️ 欄位無法解析" else ($rawname | split("/") | last) end) as $id |
+        (if $rawname == "⚠️ 欄位無法解析" then "?" else (($rawname | split("/"))[3] // "?") end) as $region |
+        ((.displayName // .display_name) // "—") as $disp |
+        ((.network // "")) as $net |
+        ((.privateServiceConnectConfig // .private_service_connect_config) // null) as $psc |
+        (($psc.enablePrivateServiceConnect // $psc.enable_private_service_connect) // false) as $pscEnabled |
+        (if ($net != "") then "私有（VPC peering）"
+         elif ($pscEnabled == true) then "私有（PSC）"
+         else "**公開端點（暴露面）**" end) as $exposure |
+        (if ($net != "") then ($net | split("/") | last) else "—" end) as $vpc |
+        (if ($pscEnabled == true) then "啟用" else "否" end) as $pscCol |
+        ((.encryptionSpec // .encryption_spec) // null) as $enc |
+        (if (($enc.kmsKeyName // $enc.kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
+        "| \($id) | \($disp) | \($region) | \($exposure) | \($vpc) | \($pscCol) | \($cmek) |"
+      ' "$VX_SRC"
+    fi
+  } > "$DIGEST/vertex-endpoints.md"
+  echo "  vertex-endpoints.md  $(wc -c < "$DIGEST/vertex-endpoints.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 endpoint 時 `.name` 必須解析得出；解析不出＝路徑錯或大小寫不符，印「⚠️ 欄位無法解析」
+  # 讓斷言 FAIL。0 endpoint 時檔案為說明文字、斷言自然通過。（公開端點的「**公開端點（暴露面）**」不含此字串。）
+  if grep -q '欄位無法解析' "$DIGEST/vertex-endpoints.md"; then
+    echo "    ❌ 斷言失敗：Vertex AI Endpoint 的 .name／網路欄位解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Vertex AI Endpoint 對外暴露表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  vertex-endpoints.md  略過（無 vertex/endpoints-all.json，Vertex AI API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。

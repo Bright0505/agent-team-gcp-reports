@@ -100,6 +100,13 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Customer-managed encryption keys for Dataproc（CMEK：gcePdKmsKeyName）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/customer-managed-encryption)
 - [Dataproc security configuration（Kerberos／secure multi-tenancy）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/security)
 
+## Vertex AI Endpoint 對外暴露與加密
+
+- [Choose an endpoint type（公開端點 vs 私有端點：公開推論端點的網際網路暴露面）](https://docs.cloud.google.com/vertex-ai/docs/predictions/choose-endpoint-type)
+- [Use private services access endpoints for online inference（`network` VPC peering 私有化）](https://docs.cloud.google.com/vertex-ai/docs/predictions/using-private-endpoints)
+- [About accessing Vertex AI through Private Service Connect endpoints（`privateServiceConnectConfig` PSC 私有化）](https://docs.cloud.google.com/vertex-ai/docs/general/psc-endpoints)
+- [Customer-managed encryption keys for Vertex AI（CMEK：encryptionSpec.kmsKeyName）](https://docs.cloud.google.com/vertex-ai/docs/general/cmek)
+
 ## 稽核
 
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)

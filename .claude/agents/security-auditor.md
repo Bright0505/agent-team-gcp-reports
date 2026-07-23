@@ -37,7 +37,9 @@ model: opus
    **`digest/dataflow-jobs.md`**（Dataflow job 的 worker 公開 IP 暴露面／worker 網路歸屬（VPC）／CMEK；**此表是掃描當下即時快照、
    非期別歷史**；Dataflow API 未啟用時此檔不存在＝資料缺口）、
    **`digest/dataproc-clusters.md`**（Dataproc cluster 的 worker 公開 IP 暴露面（`internalIpOnly`）／worker 網路歸屬（VPC）／
-   worker 服務帳戶／CMEK／Kerberos；Dataproc API 未啟用時此檔不存在＝資料缺口）。
+   worker 服務帳戶／CMEK／Kerberos；Dataproc API 未啟用時此檔不存在＝資料缺口）、
+   **`digest/vertex-endpoints.md`**（Vertex AI Endpoint 的**對外暴露判定**（`network`／`privateServiceConnectConfig` 皆無＝
+   公開端點）／VPC 歸屬／CMEK；無 endpoint 時該表會明寫「沒有任何 Vertex AI Endpoint」，Vertex AI API 未啟用時此檔不存在＝資料缺口）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -58,7 +60,7 @@ model: opus
 | Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 與 AlloyDB 的公開 IP／授權外部網段。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
 | Implement shift-left security | 屬 CI/CD 流程面，**唯讀掃描評估不到**，列入掃描範圍外 |
 | Implement preemptive cyber defense | Cloud Armor 安全政策、組織政策。**Security Command Center 需組織層權限，屬掃描範圍外** |
-| Use AI securely and responsibly | 專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
+| Use AI securely and responsibly | Vertex AI Endpoint 的對外暴露判定（`digest/vertex-endpoints.md`：`network`／`privateServiceConnectConfig` 皆無＝公開端點）＋CMEK。專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
 | Use AI for security | 同上，明寫不適用或未採用 |
 | Meet regulatory, compliance, and privacy needs | 可查：稽核記錄、資料所在區域、CMEK。**法遵要求本身需業務輸入，屬掃描範圍外** |
 
@@ -147,6 +149,15 @@ model: opus
   Compute SA 或掛過大角色即過度授權（比照 VM 的預設 SA 判斷）；(4) **CMEK**（`gcePdKmsKeyName`）；(5) **叢集內驗證**
   （`kerberosConfig.enableKerberos`）：未啟用＝叢集內元件間無 Kerberos 認證。Dataproc API 未啟用時此檔不存在，屬資料缺口，
   寫「Dataproc API 未啟用，無法評估」即可
+- **Vertex AI Endpoint 對外暴露**（見 `digest/vertex-endpoints.md`）——這是 Vertex AI 最大的安全風險點，
+  也是官方「Use AI securely and responsibly」原則的核心組態證據：模型推論端點若對公網開放＝資料與模型外洩面。
+  三個重點——(1) **端點對外暴露**：`network`（VPC peering／Private Service Access）與 `privateServiceConnectConfig`
+  （PSC）**互斥**，**兩者皆無＝公開端點**（有公開 REST/gRPC 端點，網際網路可及）；digest 已保守把非明確私有者標
+  「**公開端點（暴露面）**」，引用時據此下發現、建議改用 PSC 或 Private Service Access 私有化；(2) **VPC 歸屬**
+  （`network`）：走 VPC peering 時綁定哪個 VPC；(3) **CMEK**（`encryptionSpec.kmsKeyName`；缺席＝Google 管理金鑰）。
+  ⚠️ 本專案掃描時無任何 endpoint（有效證據，非資料缺口），此項寫「本專案未建立 Vertex AI Endpoint」即可；
+  Vertex AI API 未啟用時此檔不存在，屬資料缺口，寫「Vertex AI API 未啟用，無法評估」即可。
+  （本項也直接回應 WAF 原則表的「Use AI securely and responsibly」：專案無此類端點時須明寫「本專案不適用」，不可略過）
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 
