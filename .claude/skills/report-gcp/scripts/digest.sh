@@ -896,6 +896,79 @@ else
   echo "  dataflow-jobs.md  略過（無 dataflow/jobs.json，Dataflow API 未啟用＝資料缺口，見 scan-gaps.md）"
 fi
 
+# ── Dataproc cluster（worker 網路歸屬／公開 IP 暴露面／worker SA／CMEK／Kerberos）總表 ─────
+# 來源：dataproc/clusters-all.json（scan.sh 逐 active region 跑 clusters list 後合併；list 已回完整 Cluster 資源，
+#      含 config.gceClusterConfig／encryptionConfig／securityConfig，比照 Filestore 不需逐一 describe）。
+# 安全重點（見 gcp-docs-sec.md「Dataproc worker 網路安全性與加密」）：
+#   worker 公開 IP：config.gceClusterConfig.internalIpOnly。⚠️ 官方：**僅 image 2.2.x 預設 true**，其餘版本
+#     預設 false，且欄位可能缺席——故本投影**保守判定**：只有 `internalIpOnly == true` 才算「私有（無公開 IP）」，
+#     false／缺席一律標「**可能有公開 IP（暴露面）**」（偏向過度回報，絕不漏報，比照 Dataflow ipConfiguration）。
+#   worker 網路歸屬：config.gceClusterConfig.networkUri／subnetworkUri（跑在哪個 VPC／子網）。
+#   worker SA：config.gceClusterConfig.serviceAccount（過度授權風險）；CMEK：config.encryptionConfig.gcePdKmsKeyName；
+#   叢集內驗證：config.securityConfig.kerberosConfig.enableKerberos（未啟用＝叢集內無 Kerberos）。
+# ⚠️ 空值語意：dataproc/clusters-all.json **不存在**＝clusters list 未執行（API 未啟用；scan.sh 已把「API 未啟用」
+#    記成資料缺口 FAILED，見 scan-gaps.md）→ 本段優雅略過；存在但為 `[]`＝API 啟用但無叢集（有效證據）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 dataproc.googleapis.com 未啟用，list 實跑 0 次，同 Dataflow 等）；
+#    僅依官方 Dataproc v1 Cluster／GceClusterConfig schema 撰寫。防呆錨點：有 cluster 但 config.gceClusterConfig
+#    整個缺席＝路徑錯，印「⚠️ 欄位無法解析」讓斷言 FAIL，**絕不可默默印「未設定」**。camelCase／snake_case 雙接
+#    （internalIpOnly／internal_ip_only 等）——Dataproc gcloud 輸出的大小寫無真實資料可證，比照 GCS 值區雙接防呆。
+DP_SRC="$DATA/dataproc/clusters-all.json"
+if [ -f "$DP_SRC" ]; then
+  {
+    echo "# Dataproc cluster worker 網路／公開 IP／SA／CMEK／Kerberos 總表"
+    echo ""
+    echo "來源：\`data/dataproc/clusters-all.json\`（各 active region 的 \`dataproc clusters list\` 合併；list 已回完整"
+    echo "Cluster 資源，含 \`config.gceClusterConfig\`／\`encryptionConfig\`／\`securityConfig\`）。此表為其確定性投影。"
+    echo ""
+    echo "安全重點：**worker 公開 IP**（\`config.gceClusterConfig.internalIpOnly\`；**僅 image 2.2.x 預設 true**，"
+    echo "其餘版本預設 false 或欄位缺席，故本表只把 \`internalIpOnly=true\` 判為私有、其餘一律標暴露面＝保守過度回報）；"
+    echo "**worker 網路歸屬**（\`networkUri\`／\`subnetworkUri\`）；**worker 服務帳戶**（過度授權風險）；"
+    echo "**CMEK**（\`gcePdKmsKeyName\`）；**叢集內驗證**（Kerberos）。"
+    echo ""
+    DP_N="$(jq -r 'length' "$DP_SRC" 2>/dev/null || echo 0)"
+    if [ "${DP_N:-0}" -eq 0 ]; then
+      echo "**本專案沒有任何 Dataproc cluster**（Dataproc API 已啟用但各 active region 的 clusters list 皆回空＝有效證據，不是資料缺口）。"
+    else
+      echo "| 叢集 | 狀態 | 區域／可用區 | worker 網路（VPC） | worker 子網 | worker 公開 IP | 主節點數 | worker 數 | worker 服務帳戶 | CMEK | Kerberos |"
+      echo "|---|---|---|---|---|---|---:|---:|---|---|---|"
+      jq -r '
+        .[] |
+        (.clusterName // "⚠️ 欄位無法解析") as $name |
+        ((.status.state // .status.State // "?")) as $state |
+        (.config // .Config // null) as $cfg |
+        (($cfg.gceClusterConfig // $cfg.gce_cluster_config) // null) as $gce |
+        ((($cfg.masterConfig // $cfg.master_config).numInstances // ($cfg.masterConfig // $cfg.master_config).num_instances) // "?") as $nmaster |
+        ((($cfg.workerConfig // $cfg.worker_config).numInstances // ($cfg.workerConfig // $cfg.worker_config).num_instances) // "?") as $nworker |
+        ((.labels."goog-dataproc-location" // $gce.zoneUri // $gce.zone_uri // "?") | split("/") | last) as $loc |
+        (if $gce == null then "⚠️ 欄位無法解析"
+         else (($gce.networkUri // $gce.network_uri) // "default（預設網路）" | split("/") | last) end) as $net |
+        (if $gce == null then "—"
+         else (($gce.subnetworkUri // $gce.subnetwork_uri) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
+        (($gce.internalIpOnly // $gce.internal_ip_only) // null) as $iponly |
+        (if $gce == null then "⚠️ 欄位無法解析"
+         elif $iponly == true then "私有（無公開 IP）"
+         else "**可能有公開 IP（暴露面）**" end) as $pubip |
+        (if $gce == null then "?" else (($gce.serviceAccount // $gce.service_account) // "（預設 Compute SA）") end) as $sa |
+        (if (($cfg.encryptionConfig // $cfg.encryption_config).gcePdKmsKeyName // ($cfg.encryptionConfig // $cfg.encryption_config).gce_pd_kms_key_name // "") != "" then "有" else "Google 管理" end) as $cmek |
+        (if ((($cfg.securityConfig // $cfg.security_config).kerberosConfig // ($cfg.securityConfig // $cfg.security_config).kerberos_config).enableKerberos // false) == true then "啟用" else "未啟用" end) as $kerb |
+        "| \($name) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($nmaster) | \($nworker) | \($sa) | \($cmek) | \($kerb) |"
+      ' "$DP_SRC"
+    fi
+  } > "$DIGEST/dataproc-clusters.md"
+  echo "  dataproc-clusters.md  $(wc -c < "$DIGEST/dataproc-clusters.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 cluster 時 config.gceClusterConfig 必須解析得出；解析不出＝路徑錯或大小寫不符，
+  # 印「⚠️ 欄位無法解析」讓斷言 FAIL。0 cluster 時檔案為說明文字、斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/dataproc-clusters.md"; then
+    echo "    ❌ 斷言失敗：Dataproc cluster 的 config.gceClusterConfig／worker 網路欄位解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Dataproc worker 網路表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  dataproc-clusters.md  略過（無 dataproc/clusters-all.json，Dataproc API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。

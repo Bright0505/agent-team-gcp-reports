@@ -93,6 +93,13 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Access control with IAM for Dataflow（誰能提交／管理 job）](https://docs.cloud.google.com/dataflow/docs/concepts/access-control)
 - [Use customer-managed encryption keys for Dataflow（CMEK）](https://docs.cloud.google.com/dataflow/docs/guides/customer-managed-encryption-keys)
 
+## Dataproc worker 網路安全性與加密
+
+- [Dataproc cluster network configuration（networkUri／subnetworkUri／internal IP only）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/network)
+- [Dataproc service accounts（worker VM 用的 serviceAccount 與最小權限）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/service-accounts)
+- [Customer-managed encryption keys for Dataproc（CMEK：gcePdKmsKeyName）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/customer-managed-encryption)
+- [Dataproc security configuration（Kerberos／secure multi-tenancy）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/security)
+
 ## 稽核
 
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)

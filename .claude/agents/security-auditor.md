@@ -35,7 +35,9 @@ model: opus
    **`digest/pubsub.md`**（Pub/Sub topic／subscription 存取控制與資料流：push endpoint 對外資料流／OIDC 驗證、
    IAM 公開授權、訊息儲存地區限制、CMEK；無 topic／subscription 時該表會明寫「沒有任何 Pub/Sub topic 或 subscription」）、
    **`digest/dataflow-jobs.md`**（Dataflow job 的 worker 公開 IP 暴露面／worker 網路歸屬（VPC）／CMEK；**此表是掃描當下即時快照、
-   非期別歷史**；Dataflow API 未啟用時此檔不存在＝資料缺口）。
+   非期別歷史**；Dataflow API 未啟用時此檔不存在＝資料缺口）、
+   **`digest/dataproc-clusters.md`**（Dataproc cluster 的 worker 公開 IP 暴露面（`internalIpOnly`）／worker 網路歸屬（VPC）／
+   worker 服務帳戶／CMEK／Kerberos；Dataproc API 未啟用時此檔不存在＝資料缺口）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -137,6 +139,14 @@ model: opus
   VPC／子網，決定其可及的內部資源，未指定＝跑在 default 網路（治理訊號）；(3) **CMEK**（`serviceKmsKeyName`；
   缺席＝Google 管理金鑰）。⚠️ **此表是掃描當下的即時快照、非期別歷史**（Dataflow job 有生命週期，已清除的舊 job
   不會出現），判讀時以「當下狀態」理解。Dataflow API 未啟用時此檔不存在，屬資料缺口，寫「Dataflow API 未啟用，無法評估」即可
+- **Dataproc worker 網路暴露與加密**（見 `digest/dataproc-clusters.md`）：五個重點——(1) **worker 公開 IP**
+  （`config.gceClusterConfig.internalIpOnly`）：⚠️ 官方**僅 image 2.2.x 預設 true**、其餘版本預設 false 且欄位可能缺席，
+  故 digest **保守判定**只有 `internalIpOnly=true` 才算私有、其餘一律標「**可能有公開 IP（暴露面）**」——引用時據此下發現、
+  建議改用 `--no-address`／`internalIpOnly=true`（須先在子網啟用 Private Google Access）；(2) **worker 網路歸屬**
+  （`networkUri`／`subnetworkUri`）：cluster 跑在哪個 VPC／子網；(3) **worker 服務帳戶**（`serviceAccount`）：用預設
+  Compute SA 或掛過大角色即過度授權（比照 VM 的預設 SA 判斷）；(4) **CMEK**（`gcePdKmsKeyName`）；(5) **叢集內驗證**
+  （`kerberosConfig.enableKerberos`）：未啟用＝叢集內元件間無 Kerberos 認證。Dataproc API 未啟用時此檔不存在，屬資料缺口，
+  寫「Dataproc API 未啟用，無法評估」即可
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

@@ -23,7 +23,9 @@ model: sonnet
    API 未啟用時此檔不存在，Cloud Run 的 CPU／記憶體／並行度等效能欄位仍需讀原始 describe）、
    **`digest/filestore-instances.md`**（Filestore 層級＝效能層級與檔案共用容量；Filestore API 未啟用或無執行個體時不存在）、
    **`digest/dataflow-jobs.md`**（Dataflow job 的 worker 機型＝運算規格訊號；**此表是掃描當下即時快照、非期別歷史**；
-   Dataflow API 未啟用或無 job 時不存在）。
+   Dataflow API 未啟用或無 job 時不存在）、
+   **`digest/dataproc-clusters.md`**（Dataproc cluster 的 worker 機型與主／worker 節點數＝運算規格訊號；
+   Dataproc API 未啟用或無叢集時不存在）。
    其餘檔案（disks、gke-clusters 原始 describe、run-services 原始 describe、sql-detail、
    redis-instances 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/performance.md`
@@ -63,6 +65,8 @@ model: sonnet
 - **Dataflow worker 機型**（見 `digest/dataflow-jobs.md` 的「worker 機型」欄）：worker VM 機型世代與規格是否合宜
   （舊世代 n1 可升級、過大／過小配置）。⚠️ **此表是掃描當下即時快照、非期別歷史**（Dataflow job 有生命週期，
   streaming 為長存、batch 為短暫）。Dataflow API 未啟用或掃描當下無 job 時此檔不存在，屬資料缺口
+- **Dataproc 叢集規格**（見 `digest/dataproc-clusters.md` 的「主節點數／worker 數」欄）：主／worker 節點數是否
+  合宜、是否有自動調度空間。Dataproc API 未啟用或無叢集時此檔不存在，屬資料缺口
 
 **資料庫效能**
 - Cloud SQL 機型世代與儲存類型（HDD vs SSD）、是否啟用儲存自動擴展
