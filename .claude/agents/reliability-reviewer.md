@@ -14,9 +14,15 @@ model: opus
    （`.claude/skills/report-gcp/scripts/digest.sh` 以 jq 產生，保留全部證據欄位並通過欄位斷言），
    **可直接引用為證據**。
    本支柱會用到的 digest：**`digest/network-facts.md`**（子網組態、Cloud NAT 覆蓋、
-   Cloud SQL 的高可用與備份狀態）、`digest/compute-instances.json`（VM 分布與可用區）、
-   `digest/backend-services.json`（健康檢查與逾時）、`digest/gcs-buckets.md`（版本控制）。
-   其餘檔案（instance-groups、gke-clusters、sql-detail、monitoring-policies、
+   Cloud SQL 的高可用與備份狀態、**第四段「無伺服器資源的網路路徑」**——Cloud Run 對 VPC connector
+   ／Direct VPC egress 的網路依賴，connector 是對外連線的潛在單點）、
+   `digest/compute-instances.json`（VM 分布與可用區）、
+   `digest/backend-services.json`（健康檢查與逾時）、`digest/gcs-buckets.md`（版本控制）、
+   **`digest/gke-clusters.json`**（私有叢集組態、control plane 端點、VPC-native）、
+   **`digest/run-services.json`**（Cloud Run 網路依賴；本專案 API 未啟用時不存在）、
+   **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector 依賴；未建立 App Engine 應用時不存在）、
+   **`digest/filestore-instances.md`**（Filestore 執行個體的層級／狀態／備份相關組態；Filestore API 未啟用或無執行個體時不存在）。
+   其餘檔案（instance-groups、gke-clusters 原始 describe、sql-detail、monitoring-policies、
    uptime-checks、snapshots 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/reliability.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-rel.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -34,7 +40,7 @@ model: opus
 |---|---|
 | Define reliability based on user-experience goals | **需業務輸入，唯讀掃描評估不到**，列入掃描範圍外 |
 | Set realistic targets for reliability | SLO／錯誤預算是否定義。**證據由 ops-reviewer 收集（避免重複計分），但這是官方歸在本支柱的原則**，本支柱須在報告中點名其有無 |
-| Build highly available systems through resource redundancy | Cloud SQL `availabilityType`、GKE 多可用區、MIG 為 zonal 或 regional、Cloud NAT 單點 |
+| Build highly available systems through resource redundancy | Cloud SQL `availabilityType`、GKE 多可用區、MIG 為 zonal 或 regional、Cloud NAT 單點、Filestore 層級（BASIC＝單一區域無備援 vs ENTERPRISE／REGIONAL 區域級高可用） |
 | Take advantage of horizontal scalability | MIG 自動調度、GKE 叢集自動調度／節點自動佈建、Cloud Run 最小／最大執行個體 |
 | Detect potential failures by using observability | 告警政策有無、通知管道有無、uptime check、記錄保留期 |
 | Design for graceful degradation | 健康檢查參數、後端服務逾時、MIG autohealing |
@@ -46,15 +52,33 @@ model: opus
 
 **單點故障（SPOF）**
 - Cloud SQL 的 `availabilityType`：`ZONAL` 即單一可用區（無自動故障轉移）
-- GKE 叢集與節點集區是否跨多個可用區；受管執行個體群組是 zonal 還是 regional
+- GKE 叢集與節點集區是否跨多個可用區；受管執行個體群組是 zonal 還是 regional。
+  另看 `digest/gke-clusters.json`：私有叢集的 control plane 端點（`enablePrivateEndpoint`）是否
+  有主控授權網段，`location` 是 region（regional control plane，較高可用）或 zone（單一可用區）
 - 單台 VM 撐關鍵服務、無執行個體群組
 - Cloud NAT 是否只設在單一區域（混合架構下的對外連線單點）
+- **無伺服器資源的網路依賴**（`digest/network-facts.md` 第四段）：Cloud Run 若走 Serverless VPC
+  Access connector 連內部服務，該 connector 即對外連線的相依點——connector 或其綁定子網異常時
+  服務連不到 VPC 內資源（Cloud SQL 私有 IP、內部 API）。Direct VPC egress 則不經 connector。
+  **App Engine 同理**（`digest/appengine-versions.json`）：Standard 環境走 Serverless VPC Access
+  connector 時，該 connector 亦為對外連線相依點；Flexible 環境直接綁 `network`／子網。
+  未建立 App Engine 應用時此項不適用（有效證據，非資料缺口）
 
 **備份與還原**
 - Cloud SQL 自動備份是否啟用、保留天數、是否啟用 PITR（`pointInTimeRecoveryEnabled`／binlog）
 - 永久磁碟是否有快照排程（`snapshotSchedulePolicy`／既有快照的時間分布）
 - Cloud Storage 值區版本控制與保留政策
 - 刪除保護（Cloud SQL `deletionProtectionEnabled`、VM `deletionProtection`）
+
+**Filestore（受管 NFS 儲存）**（見 `digest/filestore-instances.md`）
+- **層級（tier）＝可用性層級**：`BASIC_HDD`／`BASIC_SSD` 是**單一區域、無跨可用區備援**（該 zone
+  故障即不可用，屬 SPOF）；`ENTERPRISE`／`REGIONAL` 才是區域級高可用（跨可用區）。關鍵資料落在 BASIC
+  層的 Filestore 是可靠性風險
+- **備份與複寫**：Filestore 的備份是明確動作（非自動），須確認是否有備份策略；跨區域災難復原看是否
+  設定 instance replication（ENTERPRISE／REGIONAL 才支援）。掃描只查得到「執行個體與層級的存在性」，
+  **備份排程／還原演練是否做過查不到**，須列入資料缺口，不可用「有這個層級」代替「有備份且可還原」
+- ⚠️ 本專案 Filestore API 未啟用（`digest/filestore-instances.md` 不存在＝資料缺口，非「未設定」），
+  此項寫「Filestore API 未啟用，無法評估」即可
 
 **容錯與擴展**
 - 受管執行個體群組的自動修復（autohealing）與健康檢查設定

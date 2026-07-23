@@ -18,6 +18,8 @@ performance-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 - [Choose a disk type](https://docs.cloud.google.com/compute/docs/disks)
 - [Persistent Disk performance overview](https://docs.cloud.google.com/compute/docs/disks/performance)
+- [Filestore performance（吞吐量／IOPS 隨容量與層級成長）](https://docs.cloud.google.com/filestore/docs/performance)
+- [Filestore service tiers](https://docs.cloud.google.com/filestore/docs/service-tiers)
 
 ## 網路與快取
 

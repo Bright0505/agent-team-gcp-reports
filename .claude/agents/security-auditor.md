@@ -15,10 +15,18 @@ model: opus
    （`.claude/skills/report-gcp/scripts/digest.sh` 以 jq 產生，保留全部證據欄位並通過欄位斷言），
    **可直接引用為證據**。
    本支柱會用到的 digest：**`digest/network-facts.md`**（跨檔關聯的網路事實：防火牆規則的**實際暴露面**、
-   VM 對外路徑、Cloud SQL 的實際可及性——這些是確定性算出的結論，**必讀**）、
+   VM 對外路徑、Cloud SQL 的實際可及性、**第四段「無伺服器資源的網路路徑」**——Cloud Run 的 Ingress
+   ＋VPC egress 歸屬，這些是確定性算出的結論，**必讀**）、
    **`digest/iam-policy.md`**（角色 → 成員總表，已標出基本角色與公開授權）、
    **`digest/gcs-buckets.md`**（值區設定總表：PAP／UBLA／版本控制／CMEK）、
-   `digest/compute-instances.json`、`digest/backend-services.json`（Cloud Armor 判斷）。
+   **`digest/bigquery-datasets.md`**（BigQuery dataset 存取控制總表：公開／匿名授權、location、CMEK；
+   本專案無 dataset 時該表會明寫「沒有任何 BigQuery dataset」）、
+   `digest/compute-instances.json`、`digest/backend-services.json`（Cloud Armor 判斷）、
+   **`digest/gke-clusters.json`**（GKE 私有叢集／VPC-native／主控授權網段）、
+   **`digest/run-services.json`**（Cloud Run ingress／vpcAccess；本專案 API 未啟用時不存在）、
+   **`digest/appengine-services.json`**（App Engine 服務層 ingress＝`networkSettings.ingressTrafficAllowed`）與
+   **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector／network／env；未建立 App Engine 應用時兩者皆不存在）、
+   **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -64,10 +72,36 @@ model: opus
   等同「網路位置即信任」，正是零信任要淘汰的模型
 - **VPC Service Controls**：本流程掃描不到（需組織層 access-context-manager 權限），
   **必須列入「掃描範圍外」照實說明，不可因為查不到就當作沒問題**
+- **Cloud Run 對外暴露**（見 `digest/network-facts.md` 第四段與 `digest/run-services.json`）：
+  `ingress=INGRESS_TRAFFIC_ALL` 的服務可從網際網路直接呼叫，未經 IAP／Cloud Armor 把關即屬對外暴露面；
+  另看 `vpcAccess`（connector／Direct VPC egress）判斷它路由進哪個 VPC、egress 是否為 `ALL_TRAFFIC`
+- **App Engine 對外暴露**（見 `digest/network-facts.md` 第四段的 App Engine 子表、`digest/appengine-services.json`
+  ／`digest/appengine-versions.json`）：**Ingress 在服務層**（`networkSettings.ingressTrafficAllowed`）——
+  `INGRESS_TRAFFIC_ALLOWED_ALL`（或 networkSettings 缺席的預設值）＝可從網際網路直接呼叫，未經 IAP／
+  App Engine firewall 把關即屬對外暴露面；`INTERNAL_ONLY`／`INTERNAL_AND_LB` 才限制為 VPC 內部。
+  **VPC 出口在版本層**（`vpcAccessConnector`／Flexible 環境的 `network`）判斷它連進哪個 VPC。
+  ⚠️ 本專案未建立 App Engine 應用時，此項寫「本專案未建立 App Engine 應用」即可（有效證據，非資料缺口）
+- **GKE 叢集網路控制**（見 `digest/gke-clusters.json`）：是否為 **private cluster**
+  （`privateCluster.enablePrivateNodes`／`enablePrivateEndpoint`）、是否 **VPC-native**（`vpcNative`）、
+  **主控端授權網段**（`masterAuthorizedNetworks.enabled`／`cidrBlocks`）是否限制存取。
+  ⚠️ 常見高風險組態：私有端點關閉（`enablePrivateEndpoint=false`）或主控授權網段未啟用＝
+  control plane 對公網開放；節點非私有（`enablePrivateNodes=false`）＝節點有公開 IP
 
 **資料保護**
 - Cloud Storage：`publicAccessPrevention` 是否 `enforced`、UBLA 是否啟用、有無 CMEK
 - Cloud SQL：public IP × `authorizedNetworks` × SSL 模式（三者一起看，判定見 network-facts.md）
+- **BigQuery dataset 存取控制**（見 `digest/bigquery-datasets.md`）：dataset 的 `access[]` 是否含
+  **公開／匿名授權**（`iamMember: allUsers`＝網際網路任何人；`iamMember/specialGroup: allAuthenticatedUsers`
+  ＝任何 Google 帳號）——這是 BigQuery 資料外洩的最高風險，等同 GCS 值區公開。另看資料所在 `location`
+  （資料主權）與是否使用 **CMEK**（`defaultEncryptionConfiguration`；缺席＝Google 管理金鑰）。
+  ⚠️ 本專案掃描時無任何 dataset（有效證據，非資料缺口），此項寫「本專案未建立 BigQuery dataset」即可
+- **Filestore NFS 掛載點存取控制**（見 `digest/filestore-instances.md`）：Filestore 無公開 IP，
+  但**誰能掛載這個 VPC 內的 NFS 共用**取決於 `nfsExportOptions`——重點看 `ipRanges`（若為 `0.0.0.0/0`
+  ＝該 VPC 內任何位址都能掛載）、`accessMode`（READ_WRITE vs READ_ONLY）與 `squashMode`
+  （`NO_ROOT_SQUASH` 允許掛載端以 root 身分寫入，是常見的越權風險）。⚠️ **未指定匯出選項時的預設是
+  「全部用戶端可讀寫、NO_ROOT_SQUASH」**（最寬鬆），digest 已標出。另看綁定 VPC 的防火牆是否限制到
+  NFS 埠（2049）、以及是否使用 CMEK（`kmsKeyName`）。Filestore API 未啟用時此檔不存在，屬資料缺口，
+  寫「Filestore API 未啟用，無法評估」即可
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

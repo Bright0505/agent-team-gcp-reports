@@ -163,6 +163,11 @@ def firewall_exposure(out, fw, vms):
 
     out.append("\n> 註：VM 無外部 IP 不代表完全不可達——經由外部負載平衡器（`lb/forwarding-rules.json`）")
     out.append("> 的流量會以 Google 前端的來源位址到達後端，需搭配 `lb/backend-services.json` 一起判斷。")
+    out.append("\n> 註：Filestore（受管 NFS）等透過 Private Service Access／VPC Peering 連接的儲存資源")
+    out.append("> **沒有公開 IP 的概念**，不會出現在上面的網際網路暴露判定裡——其可及性完全取決於綁定 VPC")
+    out.append("> 的**內部路由與防火牆**，以及 NFS 匯出選項（`nfsExportOptions`：哪些網段能掛載、讀寫或唯讀）。")
+    out.append("> 因此 Filestore 不另立跨檔關聯段落（其 VPC 綁定是單檔即可得的事實，無需跨檔比對）；")
+    out.append("> 若專案有 Filestore，綁定的 VPC／保留網段／連線模式／NFS 匯出控制見 `data/digest/filestore-instances.md`。")
 
 
 def vm_paths(out, vms, subnets, routers):
@@ -267,6 +272,127 @@ def sql_reachability(out, sqls):
         )
 
 
+def serverless_paths(out, runs, connectors, ae_services, ae_versions):
+    """第四段：無伺服器資源（Cloud Run／App Engine）的網路路徑。
+
+    GCP 的無伺服器資源沒有「公有／私有子網」，網路歸屬看兩件事：
+      Ingress  — 誰能呼叫它（對外開放 vs 僅內部）
+      VPC egress — 它連出去走哪個 VPC。兩種走法：
+        Serverless VPC Access **connector**（要反查 vpc-connectors.json 拿 connector 綁的網路）
+        **Direct VPC egress**（Cloud Run）／**Flexible 環境 network**（App Engine）
+    這正是使用者截圖抓到的誤判來源：只看 list 層級會把有 VPC 出口的服務誤標成「不屬於任何 VPC」。
+    App Engine 的 Ingress 在 **service** 層（networkSettings.ingressTrafficAllowed），VPC 出口在
+    **version** 層（vpcAccessConnector／network），兩者分屬不同資源，需一起看。
+    """
+    out.append("\n## 4. 無伺服器資源的網路路徑\n")
+    out.append("Cloud Run／Cloud Functions／App Engine **沒有公有／私有子網**，其網路歸屬看 **Ingress**")
+    out.append("（誰能呼叫它）與 **VPC egress**（它連出去走哪個 VPC）。VPC 出口走 Serverless VPC Access")
+    out.append("**connector**（要反查 connector 綁定的網路）、Cloud Run 的 **Direct VPC egress**，或")
+    out.append("App Engine Flexible 環境的 **network** 直接綁定。只看清單層級會漏掉這層，把有 VPC 出口的")
+    out.append("服務誤標成「不屬於任何 VPC」。\n")
+
+    # connector 名 → 綁定的 network（Cloud Run 與 App Engine 共用此反查）
+    conn_net = {}
+    for c in connectors or []:
+        conn_net[last(c.get("name"))] = last(c.get("network"))
+
+    # ── Cloud Run ──
+    out.append("### Cloud Run\n")
+    if runs is None:
+        out.append("本專案沒有 Cloud Run 服務或 Cloud Run API 未啟用（`digest/run-services.json` 不存在）。")
+    elif not runs:
+        out.append("本專案沒有 Cloud Run 服務（掃描回空清單＝有效證據）。")
+    else:
+        out.append("| 服務 | Ingress 設定 | VPC 路由方式 | 路由進的 VPC | egress 模式 |")
+        out.append("|---|---|---|---|---|")
+        for r in runs:
+            name = r.get("name")
+            ingress = r.get("ingress") or "?"
+            va = r.get("vpcAccess") or {}
+            connector = va.get("connector")
+            nis = va.get("networkInterfaces") or []
+            if connector:
+                via = "connector"
+                cn = last(connector)
+                vpc = conn_net.get(cn) or f"（connector {cn}，未反查到綁定網路）"
+            elif nis:
+                via = "Direct VPC egress"
+                vpc = "、".join(filter(None, (last(ni.get("network")) for ni in nis))) or "（未指定 network）"
+            else:
+                via = "無"
+                vpc = "—"
+            if ingress == "INGRESS_TRAFFIC_ALL":
+                ing = f"**{ingress}（對外開放）**"
+            elif ingress in ("INGRESS_TRAFFIC_INTERNAL_ONLY", "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"):
+                ing = f"{ingress}（僅內部）"
+            else:
+                ing = ingress
+            egress = va.get("egress") or ("PRIVATE_RANGES_ONLY（預設）" if via != "無" else "—")
+            out.append(f"| `{name}` | {ing} | {via} | {vpc} | {egress} |")
+        out.append("")
+        out.append("> Ingress＝`INGRESS_TRAFFIC_ALL` 者可從網際網路直接呼叫（除非另有 Cloud Armor／IAP 把關），")
+        out.append("> 屬對外暴露面。egress＝`ALL_TRAFFIC` 代表所有出站流量（含公有網際網路）都導進 VPC；")
+        out.append("> `PRIVATE_RANGES_ONLY`（預設）只有私有網段走 VPC。")
+        out.append("> ⚠️ Cloud Run 的 `ingress`／`vpcAccess` 欄位路徑尚未經真實資料驗證（本專案 API 未啟用），")
+        out.append("> 引用前對回 `data/digest/run-services.json` 與原始 describe 檔確認。")
+
+    # ── App Engine ──
+    out.append("\n### App Engine\n")
+    if ae_services is None and ae_versions is None:
+        out.append("本專案未建立 App Engine 應用（`gcloud app describe` 回「does not contain an App Engine "
+                   "application」＝未設定／有效證據，非資料缺口；`digest/appengine-*.json` 不存在）。")
+    else:
+        out.append("**服務層 Ingress 控制**（`networkSettings.ingressTrafficAllowed`，決定誰能呼叫服務）：\n")
+        if not ae_services:
+            out.append("（App Engine 應用存在但沒有任何服務，或服務層 describe 未取得）\n")
+        else:
+            out.append("| 服務 | Ingress 允許來源 |")
+            out.append("|---|---|")
+            for s in ae_services:
+                ing = s.get("ingress") or "?"
+                if "INTERNAL_ONLY" in ing:
+                    label = f"{ing}（僅 VPC 內部）"
+                elif "INTERNAL_AND_LB" in ing:
+                    label = f"{ing}（VPC 內部＋負載平衡器）"
+                elif "ALL" in ing:
+                    label = f"**{ing}（公開＋私有皆可呼叫，對外開放）**"
+                else:
+                    label = ing
+                out.append(f"| `{s.get('name')}` | {label} |")
+
+        out.append("\n**版本層 VPC 出口與環境**（`vpcAccessConnector`／`network`／`env`）：\n")
+        if not ae_versions:
+            out.append("（沒有任何版本，或版本層 describe 未取得）")
+        else:
+            out.append("| 服務 | 版本 | 環境 | 狀態 | VPC 出口方式 | 出口 VPC | egress 設定 |")
+            out.append("|---|---|---|---|---|---|---|")
+            for v in ae_versions:
+                connector = v.get("vpcConnector")
+                net = v.get("network")
+                if connector:
+                    via = "Serverless VPC Access connector"
+                    cn = last(connector)
+                    vpc = conn_net.get(cn) or f"（connector {cn}，未反查到綁定網路）"
+                elif net:
+                    via = "Flexible 環境 network"
+                    vpc = net + (f"/{v['subnetwork']}" if v.get("subnetwork") else "")
+                else:
+                    via = "無"
+                    vpc = "—"
+                egress = v.get("vpcEgressSetting") or ("—" if via == "無" else "（預設）")
+                out.append(
+                    f"| `{v.get('service')}` | {v.get('version')} | {v.get('env') or '?'} | "
+                    f"{v.get('servingStatus') or '?'} | {via} | {vpc} | {egress} |"
+                )
+        out.append("")
+        out.append("> App Engine Standard 環境的對外連出走 **Serverless VPC Access connector**")
+        out.append("> （`vpcAccessConnector`）；Flexible 環境可直接綁 `network`／`subnetworkName`（性質接近 VM）。")
+        out.append("> Ingress＝`INGRESS_TRAFFIC_ALLOWED_ALL`（或 networkSettings 缺席的預設值）者可從網際網路")
+        out.append("> 直接呼叫，屬對外暴露面，須併同 VM／Cloud SQL／Cloud Run 一起評估。")
+        out.append("> ⚠️ App Engine 的 service／version 網路欄位路徑尚未經真實資料驗證（本專案未建立 App Engine 應用），")
+        out.append("> 引用前對回 `data/digest/appengine-services.json`／`appengine-versions.json` 與原始 describe 檔確認。")
+
+
 def main():
     if not os.path.exists(os.path.join(DATA, "scan-meta.json")):
         print("錯誤：找不到 data/scan-meta.json，請先執行 bash .claude/skills/report-gcp/scripts/scan.sh",
@@ -305,9 +431,19 @@ def main():
         "引用時對回 `data/` 下的原始檔（本表只是它們的確定性推導）。",
     ]
 
+    # 無伺服器資源：runs 為 None 代表 digest/run-services.json 不存在（API 未啟用），
+    # serverless_paths 會優雅印出說明；connectors 用於反查 connector → 綁定的 VPC。
+    # App Engine：ae_services／ae_versions 為 None 代表 digest/appengine-*.json 不存在
+    #（未建立 App Engine 應用），同樣優雅印出說明。ingress 在 service 層、VPC 出口在 version 層，故兩份都讀。
+    runs = load("digest", "run-services.json")
+    connectors = load("network", "vpc-connectors.json") or []
+    ae_services = load("digest", "appengine-services.json")
+    ae_versions = load("digest", "appengine-versions.json")
+
     firewall_exposure(out, fw, vms)
     vm_paths(out, vms, subnets, routers)
     sql_reachability(out, sqls)
+    serverless_paths(out, runs, connectors, ae_services, ae_versions)
 
     os.makedirs(DIGEST, exist_ok=True)
     path = os.path.join(DIGEST, "network-facts.md")
