@@ -23,7 +23,9 @@ model: opus
    **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector 依賴；未建立 App Engine 應用時不存在）、
    **`digest/filestore-instances.md`**（Filestore 執行個體的層級／狀態／備份相關組態；Filestore API 未啟用或無執行個體時不存在）、
    **`digest/alloydb-clusters.md`**（AlloyDB instance 的 `availabilityType`／read pool 冗餘、cluster 的
-   automated＋continuous 備份／CMEK；無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）。
+   automated＋continuous 備份／CMEK；無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）、
+   **`digest/memcached-instances.md`**（Memorystore Memcached 的 `zones` 可用區分布＝可用區冗餘、
+   `nodeCount` 節點數；Memcached API 未啟用或無執行個體時不存在）。
    其餘檔案（instance-groups、gke-clusters 原始 describe、sql-detail、monitoring-policies、
    uptime-checks、snapshots 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/reliability.md`
@@ -42,7 +44,7 @@ model: opus
 |---|---|
 | Define reliability based on user-experience goals | **需業務輸入，唯讀掃描評估不到**，列入掃描範圍外 |
 | Set realistic targets for reliability | SLO／錯誤預算是否定義。**證據由 ops-reviewer 收集（避免重複計分），但這是官方歸在本支柱的原則**，本支柱須在報告中點名其有無 |
-| Build highly available systems through resource redundancy | Cloud SQL 與 AlloyDB `availabilityType`（ZONAL vs REGIONAL）、AlloyDB read pool 冗餘、GKE 多可用區、MIG 為 zonal 或 regional、Cloud NAT 單點、Filestore 層級（BASIC＝單一區域無備援 vs ENTERPRISE／REGIONAL 區域級高可用） |
+| Build highly available systems through resource redundancy | Cloud SQL 與 AlloyDB `availabilityType`（ZONAL vs REGIONAL）、AlloyDB read pool 冗餘、GKE 多可用區、MIG 為 zonal 或 regional、Cloud NAT 單點、Filestore 層級（BASIC＝單一區域無備援 vs ENTERPRISE／REGIONAL 區域級高可用）、Memorystore Memcached 的 `zones` 節點可用區分布與 `nodeCount` 節點數 |
 | Take advantage of horizontal scalability | MIG 自動調度、GKE 叢集自動調度／節點自動佈建、Cloud Run 最小／最大執行個體 |
 | Detect potential failures by using observability | 告警政策有無、通知管道有無、uptime check、記錄保留期 |
 | Design for graceful degradation | 健康檢查參數、後端服務逾時、MIG autohealing |
@@ -92,6 +94,17 @@ model: opus
   PRIMARY、無 read pool 時，讀取負載與可用性都集中在一個 instance 上
 - ⚠️ 本專案掃描時無任何 AlloyDB cluster（AlloyDB API 已啟用但未建立 cluster＝有效證據，非資料缺口），
   此項寫「本專案未建立 AlloyDB cluster」即可
+
+**Memorystore for Memcached**（見 `digest/memcached-instances.md`）
+- **`zones` 節點可用區分布＝可用區冗餘**：節點集中在單一可用區時，該 zone 故障即整個 Memcached
+  不可用（SPOF）；官方建議讓 Google 自動跨可用區分布節點以提升容錯（zones 未指定＝自動分布）。
+  節點全落在同一可用區是可靠性風險
+- **`nodeCount` 節點數＝資料容錯**：節點數越多，單一節點故障時失去的快取資料比例越小
+  （官方對小／中／大型執行個體分別建議 3／10／20 個節點）。單節點執行個體無任何容錯
+- ⚠️ Memcached 是**快取層、非持久儲存**：節點故障即遺失該節點的快取資料（無 RDB 快照，與 Redis 不同），
+  可靠性評估重點是「後端資料源是否能承受快取全失」與節點／可用區冗餘，而非備份
+- ⚠️ 本專案 Memcached API（memcache.googleapis.com）未啟用（`digest/memcached-instances.md` 不存在
+  ＝資料缺口，非「未設定」），此項寫「Memcached API 未啟用，無法評估」即可
 
 **容錯與擴展**
 - 受管執行個體群組的自動修復（autohealing）與健康檢查設定

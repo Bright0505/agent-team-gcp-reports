@@ -641,6 +641,64 @@ else
   echo "  alloydb-clusters.md  略過（無 db/alloydb-clusters.json，AlloyDB clusters list 查詢失敗或權限不足）"
 fi
 
+# ── Memorystore for Memcached 執行個體設定總表 ─────────────────────────
+# 來源：db/memcached-instances.json（gcloud memcache instances list --region - --format=json；list 已回完整資源）。
+# 一張表看完：位置、版本、狀態、綁定 VPC（authorizedNetwork＝網路歸屬）、節點可用區分布（zones＝可用區冗餘）、
+# 節點數（nodeCount）、每節點規格（nodeConfig.cpuCount／memorySizeMb）。可靠性重點在 zones 與 nodeCount：
+# 節點集中單一可用區＝該 zone 故障即全失；節點數越多、單一節點故障失去的資料越少（官方建議見 gcp-docs-rel.md）。
+# ⚠️ 空值語意：db/memcached-instances.json **不存在**＝list 查詢失敗（API 未啟用／權限不足，資料缺口）；
+#    **存在但為 []**＝專案真的沒有任何 Memcached 執行個體（有效證據）。兩者結論相反，不可混。
+# ⚠️ 本專案 memcache.googleapis.com 未啟用（list 回 SERVICE_DISABLED＝資料缺口，檔案不存在→本段優雅略過），
+#    此段欄位路徑**未經真實資料驗證**（同 Cloud Run／Filestore／AlloyDB 情形），僅依官方 Memcached REST v1
+#    Instance schema 撰寫。防呆錨點是**執行個體名**（.name 解析不出來→印「⚠️ 欄位無法解析」讓斷言 FAIL），
+#    **絕不可默默印「未設定」**。zones 官方定義為陣列、缺席補「—」；nodeConfig 缺席補 "?"。
+# ⚠️ Memcached **無公開 IP 的概念**（同 Redis）：只能透過綁定的 authorizedNetwork VPC 以 private services
+#    access 存取，故不進 network-facts.py 的網際網路暴露判定（VPC 綁定是單檔事實，比照 Filestore；見該檔第 1 段的註）。
+MC_SRC="$DATA/db/memcached-instances.json"
+if [ -f "$MC_SRC" ]; then
+  {
+    echo "# Memorystore for Memcached 執行個體設定總表"
+    echo ""
+    echo "來源：\`data/db/memcached-instances.json\`（gcloud memcache instances list --region - --format=json，list 已回完整資源）。"
+    echo "此表為該檔的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**Memcached 無公開 IP 的概念**（同 Redis）：只能透過綁定的 **authorizedNetwork** VPC 以 private services"
+    echo "access 存取，可及性完全取決於該 VPC 內部路由與防火牆。**可靠性**看兩個欄位：\`zones\`（節點的可用區"
+    echo "分布——集中單一可用區＝該 zone 故障即全失，跨多可用區才有容錯）與 \`nodeCount\`（節點數越多、單一節點"
+    echo "故障失去的資料越少）。\`nodeConfig\` 為每節點的 vCPU／記憶體規格。"
+    echo ""
+    if [ "$(jq -r 'length' "$MC_SRC" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 Memorystore Memcached 執行個體**（gcloud 回空清單＝有效證據，不是資料缺口）。"
+    else
+      echo "| 執行個體 | 位置 | 版本 | 狀態 | 綁定 VPC | 節點可用區分布 | 節點數 | 每節點規格 |"
+      echo "|---|---|---|---|---|---|---|---|"
+      jq -r '
+        .[] |
+        ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+        ($p | last) as $id |
+        (if ($p | length) >= 4 then $p[3] else "?" end) as $loc |
+        "| \($id) | \($loc) | \(.memcacheVersion // "?") | \(.state // "?") | " +
+        ((.authorizedNetwork // "") | if . == "" then "—" else (split("/") | last) end) + " | " +
+        (((.zones // []) | join(",")) | if . == "" then "**未指定（由 Google 自動分布）**" else . end) + " | " +
+        ((.nodeCount // "?") | tostring) + " | " +
+        ((.nodeConfig.cpuCount // "?") | tostring) + " vCPU／" + ((.nodeConfig.memorySizeMb // "?") | tostring) + " MB |"
+      ' "$MC_SRC"
+    fi
+  } > "$DIGEST/memcached-instances.md"
+  echo "  memcached-instances.md  $(wc -c < "$MC_SRC") → $(wc -c < "$DIGEST/memcached-instances.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有執行個體時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 執行個體時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/memcached-instances.md"; then
+    echo "    ❌ 斷言失敗：Memcached 執行個體名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Memcached 執行個體表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  memcached-instances.md  略過（無 db/memcached-instances.json，Memcached API 未啟用或無執行個體）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。

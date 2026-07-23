@@ -163,11 +163,14 @@ def firewall_exposure(out, fw, vms):
 
     out.append("\n> 註：VM 無外部 IP 不代表完全不可達——經由外部負載平衡器（`lb/forwarding-rules.json`）")
     out.append("> 的流量會以 Google 前端的來源位址到達後端，需搭配 `lb/backend-services.json` 一起判斷。")
-    out.append("\n> 註：Filestore（受管 NFS）等透過 Private Service Access／VPC Peering 連接的儲存資源")
-    out.append("> **沒有公開 IP 的概念**，不會出現在上面的網際網路暴露判定裡——其可及性完全取決於綁定 VPC")
-    out.append("> 的**內部路由與防火牆**，以及 NFS 匯出選項（`nfsExportOptions`：哪些網段能掛載、讀寫或唯讀）。")
-    out.append("> 因此 Filestore 不另立跨檔關聯段落（其 VPC 綁定是單檔即可得的事實，無需跨檔比對）；")
-    out.append("> 若專案有 Filestore，綁定的 VPC／保留網段／連線模式／NFS 匯出控制見 `data/digest/filestore-instances.md`。")
+    out.append("\n> 註：Filestore（受管 NFS）、Memorystore（Redis／Memcached）等透過 Private Service Access／")
+    out.append("> VPC Peering 連接的資源**沒有公開 IP 的概念**，不會出現在上面的網際網路暴露判定裡——其可及性完全")
+    out.append("> 取決於綁定 VPC 的**內部路由與防火牆**（Filestore 另加 NFS 匯出選項 `nfsExportOptions`：哪些網段能")
+    out.append("> 掛載、讀寫或唯讀；Memorystore 則綁定於 `authorizedNetwork` 這個單一 VPC）。")
+    out.append("> 因此這些資源不另立跨檔關聯段落（其 VPC 綁定是單檔即可得的事實，無需跨檔比對）；")
+    out.append("> 若專案有 Filestore，綁定的 VPC／保留網段／連線模式／NFS 匯出控制見 `data/digest/filestore-instances.md`；")
+    out.append("> 若有 Memorystore Memcached，綁定 VPC（authorizedNetwork）／可用區分布（zones）／節點數見")
+    out.append("> `data/digest/memcached-instances.md`。")
 
 
 def vm_paths(out, vms, subnets, routers):

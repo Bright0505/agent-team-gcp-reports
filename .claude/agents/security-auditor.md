@@ -29,7 +29,9 @@ model: opus
    **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector／network／env；未建立 App Engine 應用時兩者皆不存在）、
    **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）、
    **`digest/alloydb-clusters.md`**（AlloyDB cluster／instance 設定總表：公開 IP／授權外部網段／CMEK／PSC／備份；
-   無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）。
+   無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）、
+   **`digest/memcached-instances.md`**（Memorystore Memcached 綁定的 `authorizedNetwork` VPC；Memcached API
+   未啟用或無執行個體時不存在）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -111,6 +113,11 @@ model: opus
   「全部用戶端可讀寫、NO_ROOT_SQUASH」**（最寬鬆），digest 已標出。另看綁定 VPC 的防火牆是否限制到
   NFS 埠（2049）、以及是否使用 CMEK（`kmsKeyName`）。Filestore API 未啟用時此檔不存在，屬資料缺口，
   寫「Filestore API 未啟用，無法評估」即可
+- **Memorystore Memcached 網路存取控制**（見 `digest/memcached-instances.md`）：Memcached **無公開 IP、
+  無 IAM 層驗證**（不像 Cloud SQL／AlloyDB 有授權外部網段），存取控制**完全依賴綁定的 `authorizedNetwork`
+  VPC**——凡能連到該 VPC、且防火牆允許 Memcached 埠（11211）者即可存取快取，無額外驗證。重點看綁定 VPC
+  的防火牆是否限制到 11211 埠來源；快取內容若含敏感資料，VPC 內的橫向存取即為風險面。Memcached API 未啟用時
+  此檔不存在，屬資料缺口，寫「Memcached API 未啟用，無法評估」即可
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

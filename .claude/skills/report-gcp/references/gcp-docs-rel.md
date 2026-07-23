@@ -15,6 +15,8 @@ reliability-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 - [Cloud SQL maintenance](https://docs.cloud.google.com/sql/docs/mysql/maintenance)
 - [Cloud SQL read replicas](https://docs.cloud.google.com/sql/docs/postgres/replication/create-replica)
 - [Memorystore for Redis RDB snapshots](https://docs.cloud.google.com/memorystore/docs/redis/rdb-snapshots)
+- [Memorystore for Memcached overview（高可用：自動跨可用區分布節點）](https://docs.cloud.google.com/memorystore/docs/memcached/memcached-overview)
+- [Memorystore for Memcached best practices（節點數與可用區分布＝容錯）](https://docs.cloud.google.com/memorystore/docs/memcached/best-practices)
 
 ## 運算韌性
 

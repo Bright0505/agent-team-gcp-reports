@@ -30,6 +30,7 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Cloud Armor security policy overview](https://docs.cloud.google.com/armor/docs/security-policy-overview)
 - [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access)
 - [VPC Service Controls overview](https://docs.cloud.google.com/vpc-service-controls/docs/overview)
+- [Memorystore for Memcached networking（authorizedNetwork VPC 綁定／private services access，無公開 IP、無 IAM 驗證）](https://docs.cloud.google.com/memorystore/docs/memcached/networking)
 
 ## 無伺服器網路安全性（Cloud Run）
 
