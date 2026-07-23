@@ -126,6 +126,282 @@ if [ -f "$SRC" ]; then
   fi
 fi
 
+# ── Cloud Run 服務網路投影 ────────────────────────────────────────────
+# 來源：compute/run-detail/*-describe.json（scan.sh 逐服務 describe）。
+# 必留證據：ingress（對外暴露面）、vpcAccess.{connector,egress,networkInterfaces}（路由進哪個 VPC）。
+# ⚠️⚠️ 本專案 Cloud Run API 未啟用，這些欄位路徑**未經真實資料驗證**（同 GCS 值區踩過的
+#      snake/camel 教訓）。沿用同一套防呆：抓不到 ingress／name 就印「⚠️ 欄位無法解析」並讓斷言
+#      FAIL，**絕不可默默印「未設定」**——寧可斷言失敗逼人發現路徑錯了。ingress／vpcAccess
+#      用雙路 fallback：v2（頂層 .ingress、.template.vpcAccess）與 v1 Knative（annotations）都試。
+# ⚠️ ingress **必須正規化成單一 v2 詞彙**：v1 Knative annotation 的值是小寫短詞
+#    （"all"／"internal"／"internal-and-cloud-load-balancing"），但下游 network-facts.py 與
+#    build-diagram.js 只認 v2 enum（INGRESS_TRAFFIC_ALL 等）。不正規化的話，v1 風格、對外開放
+#    （"all"）的服務不會被判成暴露面——確定性腳本靜默漏標暴露面，是本專案最不能接受的錯。
+#    故此處把 v1 值對應成 v2；v2 值原樣保留；無法辨識的值（含 null→「欄位無法解析」）保留原字串，
+#    落到既有防呆，絕不靜默吞掉。
+# ⚠️ ingress 缺席（v1／v2 皆取不到）＝印「⚠️ 欄位無法解析」讓斷言 FAIL，這與下方 App Engine
+#    「缺席＝合法預設 ALL、不 FAIL」是**刻意相反**的處理：Cloud Run v2 的 ingress 一定有值，
+#    缺席代表 schema 假設錯了，寧可 loud-fail 逼人核對；App Engine 的 networkSettings 缺席則是
+#    官方定義的合法預設（見該段註解）。方向不同是有意的，不是漏改。
+RUN_DETAIL="$DATA/compute/run-detail"
+if [ -d "$RUN_DETAIL" ] && ls "$RUN_DETAIL"/*-describe.json > /dev/null 2>&1; then
+  jq -s '[.[] | {
+    name: (.metadata.name // .name // "⚠️ 欄位無法解析"),
+    ingress: ((.ingress
+               // .metadata.annotations["run.googleapis.com/ingress"]
+               // "⚠️ 欄位無法解析") as $raw |
+              {
+                "all": "INGRESS_TRAFFIC_ALL",
+                "internal": "INGRESS_TRAFFIC_INTERNAL_ONLY",
+                "internal-and-cloud-load-balancing": "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+              }[$raw] // $raw),
+    vpcAccess: {
+      connector: (.template.vpcAccess.connector
+                  // .spec.template.metadata.annotations["run.googleapis.com/vpc-access-connector"]
+                  // null),
+      egress: (.template.vpcAccess.egress
+               // .spec.template.metadata.annotations["run.googleapis.com/vpc-access-egress"]
+               // null),
+      networkInterfaces: (.template.vpcAccess.networkInterfaces // [])
+    }
+  }]' "$RUN_DETAIL"/*-describe.json > "$DIGEST/run-services.json"
+  RN="$(ls "$RUN_DETAIL"/*-describe.json | wc -l | tr -d ' ')"
+  echo "  run-services.json  ← ${RN} 個 describe"
+  MADE=$((MADE + 1))
+  D="$DIGEST/run-services.json"
+  N="$(jq -r 'length' "$D")"
+  assert "Cloud Run 服務數 > 0（${N}）" "length > 0" "$D"
+  if grep -q '欄位無法解析' "$D"; then
+    echo "    ❌ 斷言失敗：Cloud Run 的 name／ingress 欄位解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    [ "$N" -gt 0 ] && echo "    ✅ name／ingress 欄位皆解析成功（未出現「欄位無法解析」）"
+  fi
+  # vpcAccess 三個子欄位的 key 必須都在（值可為 null，但缺 key 會讓 network-facts 讀不到）
+  [ "$N" -gt 0 ] && assert "vpcAccess 結構保留（connector/egress/networkInterfaces）" \
+    "[.[] | select(.vpcAccess | has(\"connector\") and has(\"egress\") and has(\"networkInterfaces\"))] | length == $N" "$D"
+else
+  echo "  run-services.json  略過（無 compute/run-detail/，Cloud Run API 未啟用或無服務）"
+fi
+
+# ── Cloud Functions 網路投影 ──────────────────────────────────────────
+# 來源：compute/functions-detail/*-describe.json（scan.sh 逐函式 describe）。
+# 2nd gen 底層即 Cloud Run，用 serviceConfig.{ingressSettings,vpcConnector}；1st gen 是舊 schema
+# （頂層 ingressSettings／vpcConnector）。兩代欄位名不同，分開判斷並在 generation 欄註明是哪一代。
+# ⚠️ 本專案 Functions API 未啟用，欄位路徑**未經真實資料驗證**；同樣加「欄位無法解析」防呆。
+# ⚠️ Functions 的 ingress（ingressSettings）值域是 ALLOW_ALL／ALLOW_INTERNAL_ONLY／ALLOW_INTERNAL_AND_GCLB，
+#    **與 Cloud Run 的 INGRESS_TRAFFIC_* enum 不同**，故此處不套用 Cloud Run 的正規化對應。目前
+#    **Cloud Functions 尚未納入 network-facts.py 的對外開放判定**（serverless_paths 只吃 runs／App Engine，
+#    不吃 functions）；日後要納入時，記得這裡的 ingress 值域與 Cloud Run 不同，需在判定端另立對應或先正規化。
+FN_DETAIL="$DATA/compute/functions-detail"
+if [ -d "$FN_DETAIL" ] && ls "$FN_DETAIL"/*-describe.json > /dev/null 2>&1; then
+  jq -s '[.[] |
+    (if (.serviceConfig or .buildConfig) then "2nd gen" else "1st gen" end) as $gen |
+    {
+      name: ((.name // "⚠️ 欄位無法解析") | split("/") | last),
+      generation: $gen,
+      ingress: (.serviceConfig.ingressSettings
+                // .ingressSettings
+                // "⚠️ 欄位無法解析"),
+      vpcConnector: (.serviceConfig.vpcConnector
+                     // .vpcConnector
+                     // null),
+      vpcConnectorEgressSettings: (.serviceConfig.vpcConnectorEgressSettings
+                                   // .vpcConnectorEgressSettings // null)
+    }]' "$FN_DETAIL"/*-describe.json > "$DIGEST/functions.json"
+  FNN="$(ls "$FN_DETAIL"/*-describe.json | wc -l | tr -d ' ')"
+  echo "  functions.json  ← ${FNN} 個 describe"
+  MADE=$((MADE + 1))
+  D="$DIGEST/functions.json"
+  N="$(jq -r 'length' "$D")"
+  assert "Cloud Functions 數 > 0（${N}）" "length > 0" "$D"
+  if grep -q '欄位無法解析' "$D"; then
+    echo "    ❌ 斷言失敗：Cloud Functions 的 name／ingress 欄位解析不出來，請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    [ "$N" -gt 0 ] && echo "    ✅ name／ingress 欄位皆解析成功（未出現「欄位無法解析」）"
+  fi
+  [ "$N" -gt 0 ] && assert "vpcConnector 欄位保留（VPC 依賴判斷）" "[.[] | select(has(\"vpcConnector\"))] | length == $N" "$D"
+else
+  echo "  functions.json  略過（無 compute/functions-detail/，Cloud Functions API 未啟用或無函式）"
+fi
+
+# ── GKE 叢集網路投影 ──────────────────────────────────────────────────
+# 來源：compute/gke-detail/*-describe.json（scan.sh 逐叢集 describe）。GKE v1 API 欄位穩定多年，
+# 風險低，可直接照抓（本專案有 1 個叢集，此段欄位路徑已用真實 describe 驗證通過）。
+# 必留證據：privateClusterConfig（私有節點／端點）、masterAuthorizedNetworksConfig（主控授權網段）、
+#           ipAllocationPolicy.useIpAliases（VPC-native 判定）、networkConfig.{network,subnetwork}。
+# ⚠️ enablePrivateNodes／masterIpv4CidrBlock／cidrBlocks 在非私有叢集會整個欄位缺席（實測本專案叢集
+#    只有 enablePrivateEndpoint），故一律 // false／// null／// [] 補預設：缺席＝未啟用，不是解析失敗。
+GKE_DETAIL="$DATA/compute/gke-detail"
+if [ -d "$GKE_DETAIL" ] && ls "$GKE_DETAIL"/*-describe.json > /dev/null 2>&1; then
+  jq -s '[.[] | {
+    name,
+    location: (.location // "?"),
+    privateCluster: {
+      enablePrivateNodes: (.privateClusterConfig.enablePrivateNodes // false),
+      enablePrivateEndpoint: (.privateClusterConfig.enablePrivateEndpoint // false),
+      masterIpv4CidrBlock: (.privateClusterConfig.masterIpv4CidrBlock // null),
+      publicEndpoint: (.privateClusterConfig.publicEndpoint // null)
+    },
+    masterAuthorizedNetworks: {
+      enabled: (.masterAuthorizedNetworksConfig.enabled // false),
+      cidrBlocks: [((.masterAuthorizedNetworksConfig.cidrBlocks // [])[] | {cidrBlock, displayName})]
+    },
+    vpcNative: (.ipAllocationPolicy.useIpAliases // false),
+    network: ((.networkConfig.network // .network // null) | if . then (. | split("/") | last) else null end),
+    subnetwork: ((.networkConfig.subnetwork // .subnetwork // null) | if . then (. | split("/") | last) else null end)
+  }]' "$GKE_DETAIL"/*-describe.json > "$DIGEST/gke-clusters.json"
+  GN="$(ls "$GKE_DETAIL"/*-describe.json | wc -l | tr -d ' ')"
+  echo "  gke-clusters.json  ← ${GN} 個 describe"
+  MADE=$((MADE + 1))
+  D="$DIGEST/gke-clusters.json"
+  N="$(jq -r 'length' "$D")"
+  assert "GKE 叢集數 > 0（${N}）" "length > 0" "$D"
+  assert "privateCluster 保留（私有叢集判斷）"                 "[.[] | select(has(\"privateCluster\"))] | length == $N" "$D"
+  assert "masterAuthorizedNetworks 保留（主控授權網段判斷）"   "[.[] | select(has(\"masterAuthorizedNetworks\"))] | length == $N" "$D"
+  assert "vpcNative 保留（VPC-native／IP 別名判斷）"           "[.[] | select(has(\"vpcNative\"))] | length == $N" "$D"
+else
+  echo "  gke-clusters.json  略過（無 compute/gke-detail/，無 GKE 叢集或 API 未啟用）"
+fi
+
+# ── App Engine 服務 Ingress 投影（service 層）─────────────────────────
+# 來源：appengine/service-detail/*-describe.json（scan.sh 逐服務 describe）。
+# 必留證據：networkSettings.ingressTrafficAllowed（對外暴露面：誰能呼叫這個服務）。
+# ⚠️ 本專案未建立 App Engine 應用，欄位路徑**未經真實資料驗證**（同 Cloud Run 情形）。防呆錨點是
+#    **服務名**（.id／.name 皆解析不出來＝gcloud schema 變了→印「⚠️ 欄位無法解析」讓斷言 FAIL）。
+#    ingress 不當防呆錨點：官方定義 networkSettings 缺席＝預設 INGRESS_TRAFFIC_ALLOWED_ALL（對外開放），
+#    這是「有意義的缺席」而非解析失敗（同 GKE 非私有叢集欄位缺席的教訓），故缺席時補上帶標註的預設值。
+# ⚠️ 這裡「ingress 缺席＝合法預設 ALL、不 FAIL」與上方 Cloud Run／Functions「ingress 缺席＝欄位無法解析→
+#    斷言 FAIL」是**刻意相反**的：App Engine 官方定義 networkSettings 缺席就是預設對外開放（合法預設），
+#    而 Cloud Run v2 的 ingress 一定有值、缺席代表 schema 假設錯了。兩段方向不同是有意為之，不是漏改。
+AE_SVC_DETAIL="$DATA/appengine/service-detail"
+if [ -d "$AE_SVC_DETAIL" ] && ls "$AE_SVC_DETAIL"/*-describe.json > /dev/null 2>&1; then
+  jq -s '[.[] | {
+    name: (.id // (.name | split("/") | last) // "⚠️ 欄位無法解析"),
+    ingress: (.networkSettings.ingressTrafficAllowed
+              // "INGRESS_TRAFFIC_ALLOWED_ALL（networkSettings 缺席＝預設對外開放）")
+  }]' "$AE_SVC_DETAIL"/*-describe.json > "$DIGEST/appengine-services.json"
+  AESN="$(ls "$AE_SVC_DETAIL"/*-describe.json | wc -l | tr -d ' ')"
+  echo "  appengine-services.json  ← ${AESN} 個 describe"
+  MADE=$((MADE + 1))
+  D="$DIGEST/appengine-services.json"
+  N="$(jq -r 'length' "$D")"
+  assert "App Engine 服務數 > 0（${N}）" "length > 0" "$D"
+  if grep -q '欄位無法解析' "$D"; then
+    echo "    ❌ 斷言失敗：App Engine 服務名（.id／.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    [ "$N" -gt 0 ] && echo "    ✅ 服務名／ingress 欄位皆解析成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  appengine-services.json  略過（無 appengine/service-detail/，未建立 App Engine 應用或無服務）"
+fi
+
+# ── App Engine 版本網路投影（version 層）─────────────────────────────
+# 來源：appengine/version-detail/*-describe.json（scan.sh 逐版本 describe）。
+# 必留證據：vpcAccessConnector.{name,egressSetting}（Serverless VPC Access 出口＝連進哪個 VPC）、
+#           network.{name,subnetworkName}（Flexible 環境的直接網路綁定）、env（standard／flexible）。
+# service／version 名優先從資源全名 .name（apps/APP/services/SVC/versions/VER）推導；describe 只回 .id
+# 而無全路徑 .name 時，退回 scan.sh 注入的 _scan_service／_scan_version（掃描迴圈已知的權威來源，
+# 見 scan.sh 版本 describe 段），最後才落到「?」／「欄位無法解析」——確保 service 不會因缺全路徑變「?」
+# 而丟掉 network-facts 第 4 段的服務關聯。env 依官方預設 standard。
+# ⚠️ 未經真實資料驗證；防呆錨點是版本名（.id／_scan_version／.name 皆無→「⚠️ 欄位無法解析」→斷言 FAIL）。
+AE_VER_DETAIL="$DATA/appengine/version-detail"
+if [ -d "$AE_VER_DETAIL" ] && ls "$AE_VER_DETAIL"/*-describe.json > /dev/null 2>&1; then
+  jq -s '[.[] |
+    ((.name // "") | split("/")) as $p |
+    {
+      service: ((if ($p | length) >= 4 then $p[3] else null end) // ._scan_service // "?"),
+      version: (.id // ._scan_version // (if ($p | length) >= 1 then ($p | last) else null end) // "⚠️ 欄位無法解析"),
+      env: (.env // "standard"),
+      servingStatus: (.servingStatus // null),
+      vpcConnector: (.vpcAccessConnector.name // null),
+      vpcEgressSetting: (.vpcAccessConnector.egressSetting // null),
+      network: (.network.name // null),
+      subnetwork: (.network.subnetworkName // null),
+      instanceTag: (.network.instanceTag // null),
+      inboundServices: (.inboundServices // [])
+    }]' "$AE_VER_DETAIL"/*-describe.json > "$DIGEST/appengine-versions.json"
+  AEVN="$(ls "$AE_VER_DETAIL"/*-describe.json | wc -l | tr -d ' ')"
+  echo "  appengine-versions.json  ← ${AEVN} 個 describe"
+  MADE=$((MADE + 1))
+  D="$DIGEST/appengine-versions.json"
+  N="$(jq -r 'length' "$D")"
+  assert "App Engine 版本數 > 0（${N}）" "length > 0" "$D"
+  if grep -q '欄位無法解析' "$D"; then
+    echo "    ❌ 斷言失敗：App Engine 版本名解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    [ "$N" -gt 0 ] && echo "    ✅ 版本名／env／vpcAccessConnector 欄位皆解析成功（未出現「欄位無法解析」）"
+  fi
+  [ "$N" -gt 0 ] && assert "vpcConnector 欄位保留（VPC 出口判斷）" "[.[] | select(has(\"vpcConnector\"))] | length == $N" "$D"
+else
+  echo "  appengine-versions.json  略過（無 appengine/version-detail/，未建立 App Engine 應用或無版本）"
+fi
+
+# ── BigQuery dataset 存取控制總表 ────────────────────────────────────
+# 來源：bigquery/datasets.json（bq ls 索引）＋ bigquery/dataset-detail/*-describe.json（bq show 完整組態）。
+# 一眼看出哪些 dataset 有公開／匿名授權（allUsers／allAuthenticatedUsers）、資料所在地、CMEK、
+# 預設資料表過期治理——這裡的重點是安全（資料外洩），不是機器可讀 JSON，故用 gcs-buckets.md 那種總表風格。
+# ⚠️ 空值語意：bigquery/datasets.json **不存在**＝bq ls 查詢失敗（資料缺口，API 未啟用／權限不足）；
+#    **存在但為 []**＝專案真的沒有任何 dataset（有效證據）。兩者結論相反，不可混。
+# ✅ 欄位路徑已用公開 dataset（bigquery-public-data:samples）真實 bq show 驗證：
+#      公開授權以 `access[].iamMember == "allUsers"`（實測命中）呈現；allAuthenticatedUsers 可能落在
+#      `iamMember` 或舊式 `specialGroup`，兩路都接。CMEK 未啟用時 defaultEncryptionConfiguration **整欄缺席**
+#      （非解析失敗，故以「Google 管理」補），同理 defaultTableExpirationMs 缺席＝未設過期。
+#    這與 Phase 1 的 Cloud Run（API 未啟用、欄位純靠文件猜）不同：本節 bq show 輸出結構已實測。
+BQ_LIST="$DATA/bigquery/datasets.json"
+BQ_DETAIL="$DATA/bigquery/dataset-detail"
+if [ -f "$BQ_LIST" ]; then
+  {
+    echo "# BigQuery dataset 存取控制總表"
+    echo ""
+    echo "來源：\`data/bigquery/datasets.json\`（bq ls 索引）＋ \`data/bigquery/dataset-detail/*-describe.json\`（bq show 完整組態）。"
+    echo "此表為上述檔案的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**公開／匿名授權**＝access[] 含 \`iamMember: allUsers\`（網際網路上任何人，無論有無 Google 帳號）或"
+    echo "\`iamMember/specialGroup: allAuthenticatedUsers\`（任何 Google 帳號／服務帳戶）——這是 BigQuery"
+    echo "資料外洩的最高風險點。\`CMEK\` 欄為「Google 管理」代表未使用客戶自管金鑰"
+    echo "（defaultEncryptionConfiguration 欄缺席）。「預設資料表過期」未設定代表資料表預設永久保留（治理／成本訊號）。"
+    echo ""
+    if [ "$(jq -r 'length' "$BQ_LIST" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 BigQuery dataset**（bq ls 回空清單＝有效證據，不是資料缺口；"
+      echo "BigQuery 系列 API 已啟用但未建立任何 dataset）。"
+    elif [ -d "$BQ_DETAIL" ] && ls "$BQ_DETAIL"/*-describe.json > /dev/null 2>&1; then
+      echo "| Dataset | 位置 | 公開／匿名授權 | CMEK | 預設資料表過期 | 存取項目數 |"
+      echo "|---|---|---|---|---|---|"
+      jq -rs '
+        def pub: [.access[]? | select(.iamMember == "allUsers" or .iamMember == "allAuthenticatedUsers" or .specialGroup == "allAuthenticatedUsers")
+                  | (.iamMember // .specialGroup)];
+        .[] |
+        (.datasetReference.datasetId // "⚠️ 欄位無法解析") as $id |
+        (pub) as $p |
+        "| \($id) | \(.location // "?") | " +
+        (if ($p | length) > 0 then "**是（" + ($p | join(",")) + "）**" else "否" end) + " | " +
+        (if .defaultEncryptionConfiguration.kmsKeyName then "有" else "Google 管理" end) + " | " +
+        (if .defaultTableExpirationMs then (((.defaultTableExpirationMs | tonumber) / 86400000 | floor | tostring) + " 天") else "未設定" end) + " | " +
+        ((.access // []) | length | tostring) + " |"
+      ' "$BQ_DETAIL"/*-describe.json
+    else
+      echo "⚠️ **datasets.json 列出 dataset，但 dataset-detail/ 沒有對應 describe 檔**——bq show 可能失敗，"
+      echo "請查 \`data/scan-errors.log\`（此為資料缺口，不可當成「沒有 dataset」）。"
+    fi
+  } > "$DIGEST/bigquery-datasets.md"
+  echo "  bigquery-datasets.md  $(wc -c < "$DIGEST/bigquery-datasets.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 dataset 時 datasetId 不可解析不出來（bq 換 schema 會第一時間炸出來）。
+  # 0 dataset 時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/bigquery-datasets.md"; then
+    echo "    ❌ 斷言失敗：BigQuery dataset 的 datasetId 欄位解析不出來（bq 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ BigQuery dataset 表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  bigquery-datasets.md  略過（無 bigquery/datasets.json，bq ls 查詢失敗或 BigQuery API 未啟用）"
+fi
+
 # ── Cloud Storage 值區設定總表 ──────────────────────────────────────
 # 一張表看完 PAP／UBLA／版本控制／生命週期／CMEK／保留政策／記錄，
 # 讓 agent 一次 Read 就看完，不必逐欄拉原始 JSON。
@@ -194,6 +470,66 @@ if [ -f "$SRC" ]; then
   else
     [ "$NB" -gt 0 ] && echo "    ✅ PAP／UBLA 欄位皆解析成功（未出現「欄位無法解析」）"
   fi
+fi
+
+# ── Filestore 執行個體設定總表 ─────────────────────────────────────────
+# 來源：storage/filestore-instances.json（gcloud filestore instances list --format=json；list 已回完整資源）。
+# 一張表看完：層級（tier＝可用性／效能層級）、狀態、綁定 VPC／保留網段／連線模式（網路歸屬）、
+# 檔案共用容量、NFS 匯出存取控制（哪些 IP 能掛載、讀寫或唯讀、root squash＝安全）、CMEK。
+# ⚠️ 空值語意：storage/filestore-instances.json **不存在**＝list 查詢失敗（API 未啟用／權限不足，資料缺口）；
+#    **存在但為 []**＝專案真的沒有任何 Filestore 執行個體（有效證據）。兩者結論相反，不可混。
+# ⚠️ 本專案 file.googleapis.com 未啟用（list 回 SERVICE_DISABLED＝資料缺口，檔案不存在→本段優雅略過），
+#    此段欄位路徑**未經真實資料驗證**（同 Cloud Run／App Engine 情形），僅依官方 Filestore REST v1 Instance
+#    schema 撰寫。防呆錨點是**執行個體名**（.name 解析不出來＝gcloud schema 變了→印「⚠️ 欄位無法解析」
+#    讓斷言 FAIL），**絕不可默默印「未設定」**。tier／state／networks[] 官方定義恆存在，缺席時補 "?"／"—"。
+FS_SRC="$DATA/storage/filestore-instances.json"
+if [ -f "$FS_SRC" ]; then
+  {
+    echo "# Filestore 執行個體設定總表"
+    echo ""
+    echo "來源：\`data/storage/filestore-instances.json\`（gcloud filestore instances list --format=json，list 已回完整資源）。"
+    echo "此表為該檔的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**Filestore 無公開 IP 的概念**：只能透過同 VPC／VPC Peering／Private Service Access 存取，"
+    echo "可及性完全取決於綁定 VPC（\`networks[].network\`）內部路由與防火牆，以及 NFS 匯出選項"
+    echo "（\`nfsExportOptions\`：哪些 IP 網段能掛載、讀寫或唯讀、是否 root squash）。「層級（tier）」"
+    echo "決定可用性與效能：\`BASIC_HDD\`／\`BASIC_SSD\`＝單一區域無備援；\`ENTERPRISE\`／\`REGIONAL\`＝"
+    echo "區域級高可用（跨可用區）。\`CMEK\` 欄為「Google 管理」代表未使用客戶自管金鑰（kmsKeyName 缺席）。"
+    echo ""
+    if [ "$(jq -r 'length' "$FS_SRC" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 Filestore 執行個體**（gcloud 回空清單＝有效證據，不是資料缺口）。"
+    else
+      echo "| 執行個體 | 位置 | 層級 | 狀態 | 綁定 VPC | 保留網段 | 連線模式 | 檔案共用（容量 GB） | NFS 匯出存取控制 | CMEK |"
+      echo "|---|---|---|---|---|---|---|---|---|---|"
+      jq -r '
+        def nets: (.networks // []);
+        def shares: (.fileShares // []);
+        .[] |
+        ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+        ($p | last) as $id |
+        (if ($p | length) >= 4 then $p[3] else "?" end) as $loc |
+        "| \($id) | \($loc) | \(.tier // "?") | \(.state // "?") | " +
+        ((nets | map((.network // "?") | split("/") | last) | join(",")) | if . == "" then "—" else . end) + " | " +
+        ((nets | map(.reservedIpRange // "?") | join(",")) | if . == "" then "—" else . end) + " | " +
+        ((nets | map(.connectMode // "DIRECT_PEERING") | join(",")) | if . == "" then "—" else . end) + " | " +
+        ((shares | map((.name // "?") + "（" + ((.capacityGb // "?") | tostring) + "）") | join(",")) | if . == "" then "—" else . end) + " | " +
+        ((shares | map((.nfsExportOptions // []) | map(((.ipRanges // ["?"]) | join(";")) + ":" + (.accessMode // "?") + "/" + (.squashMode // "?")) | join(" ")) | map(select(. != "")) | join(" ")) | if . == "" then "**預設：全部用戶端可讀寫、NO_ROOT_SQUASH**" else . end) + " | " +
+        (if .kmsKeyName then "有" else "Google 管理" end) + " |"
+      ' "$FS_SRC"
+    fi
+  } > "$DIGEST/filestore-instances.md"
+  echo "  filestore-instances.md  $(wc -c < "$FS_SRC") → $(wc -c < "$DIGEST/filestore-instances.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有執行個體時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 執行個體時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/filestore-instances.md"; then
+    echo "    ❌ 斷言失敗：Filestore 執行個體名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Filestore 執行個體表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  filestore-instances.md  略過（無 storage/filestore-instances.json，Filestore API 未啟用或無執行個體）"
 fi
 
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
@@ -393,7 +729,7 @@ if python3 "$SKILL_DIR/scripts/network-facts.py"; then
   MADE=$((MADE + 1))
   NF="$DIGEST/network-facts.md"
   # 斷言：三個關聯區塊都要在（少任何一段代表關聯沒算出來，等於又把判斷丟回給 LLM）
-  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性"; do
+  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性" "無伺服器資源的網路路徑"; do
     if grep -q "$sec" "$NF"; then
       echo "    ✅ 網路事實：${sec}"
     else

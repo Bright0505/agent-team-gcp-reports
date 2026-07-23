@@ -171,6 +171,8 @@ function loadModel() {
   const gkesRaw = readListOptional('compute/gke-clusters.json', 'GKE 叢集');
   const runsRaw = readListOptional('compute/run-services.json', 'Cloud Run 服務');
   const fnsRaw = readListOptional('compute/functions.json', 'Cloud Functions');
+  // Serverless VPC Access connector：Cloud Run 走 connector 出 VPC 時，要反查它綁定的網路。
+  const vpcConnectors = readListOptional('network/vpc-connectors.json', 'Serverless VPC Access connector');
   const frsRaw = readListOptional('lb/forwarding-rules.json', '轉送規則（負載平衡前端）');
   const bssRaw = readListOptional('lb/backend-services.json', '後端服務');
   const urlMaps = readListOptional('lb/url-maps.json', 'URL 對應');
@@ -525,6 +527,39 @@ function loadModel() {
     }))
     .sort(byName);
 
+  // ── Cloud Run 服務的 VPC 歸屬（修正「一律畫成不屬於任何 VPC」的誤判）──
+  // 清單層級（run-services.json）**沒有** vpcAccess，先前因此把所有 Cloud Run 都畫成
+  // 「無伺服器服務（不屬於任何 VPC）」——這正是使用者截圖抓到的錯誤結論。改讀
+  // digest/run-services.json（scan.sh 逐服務 describe → digest.sh 投影）判斷 VPC 出口：
+  //   vpcAccess.connector          → 走 Serverless VPC Access connector，反查 connector 綁的網路
+  //   vpcAccess.networkInterfaces  → Direct VPC egress，直接取 networkInterfaces[].network
+  // 兩者皆無才是真正「不屬於任何 VPC」。反查不到 connector 綁定網路時 vpc 留 null，標籤另註 connector 名。
+  const runsDigest = readJsonMaybe(DATA('digest', 'run-services.json')) || [];
+  const runsByName = new Map(runsDigest.map((r) => [r.name, r]));
+  const runs = runsRaw.map((s) => {
+    // ⚠️ 名稱推導必須與 digest.sh 的 run-services 投影**同一套優先序**（.metadata.name 先、.name 後），
+    //    否則 runsByName（以 digest 的 .metadata.name // .name 為鍵）查不到，服務會退回「不屬於任何
+    //    VPC」的誤判。先前這裡是 .name 先、.metadata.name 後，優先序相反。
+    //    ⚠️ 本專案 Cloud Run API 未啟用，list 與 describe 兩邊的實際 schema **未經真實資料核對**，
+    //    此處假設 list（run-services.json）與 describe（digest）的名稱推導可對得上；待有真實資料再驗。
+    const name = (s.metadata || {}).name || s.name || '?';
+    const dg = runsByName.get(name) || {};
+    const va = dg.vpcAccess || {};
+    const connector = va.connector ? last(va.connector) : null;
+    const directNets = uniq((va.networkInterfaces || []).map((ni) => last(ni.network)).filter(Boolean));
+    let via = null;
+    let vpc = null;
+    if (connector) {
+      via = 'connector';
+      const c = vpcConnectors.find((x) => last(x.name) === connector);
+      vpc = c ? last(c.network) : null;
+    } else if (directNets.length) {
+      via = 'Direct VPC egress';
+      vpc = directNets[0];
+    }
+    return { name, kind: 'Cloud Run', ingress: dg.ingress || null, connector, directNets, via, vpc };
+  });
+
   // ---- VPC 網路：把上面所有東西掛到各自的網路上 ----
   const networks = networksRaw
     .map((n) => {
@@ -611,7 +646,7 @@ function loadModel() {
     orphanSqls,
     buckets,
     addresses,
-    runs: runsRaw,
+    runs,
     functions: fnsRaw,
     governance,
     denyRules,
@@ -620,6 +655,14 @@ function loadModel() {
 }
 
 // ---------- draw.io XML ----------
+// ⚠️ 已知限制（HTML 注入）：本檔的 sidebar／節點標籤是 `html=1` 的 draw.io 標籤字串，把服務名／
+//    網路名等動態值直接嵌進帶有意圖性 HTML（`<br>`、`<font color>`）的字串裡。esc() 只做 XML
+//    **屬性層**跳脫（&<>"），draw.io 開圖時會對 value 再解一次 HTML。目前之所以安全，是因為所有
+//    動態值都是 GCP 資源名，受 RFC1035 命名限制（只含小寫字母／數字／連字號，不含 `< > & "`）。
+//    未做統一的 HTML-escape helper：標籤本身含大量刻意的 HTML 標記，若對整條標籤 escape 會破壞
+//    `<br>`／`<font>`；若只 escape 動態值則需在全檔數十個插值點逐一套用，片面改只會造成新舊風格
+//    不一致（正是要避免的）。故維持現狀並在此記錄依賴（見 tracker Phase 1.9 待辦）。日後若資源名
+//    來源擴及非 RFC1035 的自由文字（如使用者自訂標籤／描述），必須改為對動態值統一跳脫。
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;')
@@ -1033,9 +1076,13 @@ function buildSummary(model, sd) {
     ['組織政策（專案層）', g.orgPolicies],
     ['IAM 服務帳戶', g.serviceAccounts],
   ];
+  // model.runs 已在 loadModel 依 digest/run-services.json 標好 vpcAccess 歸屬（via／vpc）；
+  // 有 VPC 出口者不再籠統畫成「不屬於任何 VPC」，而是標出路由方式與 VPC。
   const serverless = [
-    ...model.runs.map((s) => ({ name: s.name || (s.metadata || {}).name || '?', kind: 'Cloud Run' })),
-    ...model.functions.map((s) => ({ name: last(s.name) || '?', kind: 'Cloud Functions' })),
+    // connector 必須一起帶：下方 route fallback（via==='connector' 時）會讀 s.connector 顯示
+    // 「connector <名>」，漏帶會讓反查不到綁定網路的服務標籤顯示「connector ?」。
+    ...model.runs.map((s) => ({ name: s.name, kind: 'Cloud Run', via: s.via, vpc: s.vpc, ingress: s.ingress, connector: s.connector })),
+    ...model.functions.map((s) => ({ name: last(s.name) || '?', kind: 'Cloud Functions', via: null, vpc: null, connector: null })),
   ];
   const sideH =
     46 +
@@ -1104,13 +1151,39 @@ function buildSummary(model, sd) {
   sy += model.buckets.length * 130 + 14;
 
   if (serverless.length) {
-    pg.vertex('sum-side-sl', cloud, '無伺服器服務（不屬於任何 VPC）', STYLES.sideTitle, sideX, sy, S.sidebarW, 20);
+    // 標題不再一律寫「不屬於任何 VPC」——那是先前的誤判。只有真的無 VPC 出口的服務才屬於這類；
+    // 有 connector／Direct VPC egress 的服務會在自己的標籤上標出路由方式與 VPC。
+    const anyInVpc = serverless.some((s) => s.via);
+    pg.vertex(
+      'sum-side-sl',
+      cloud,
+      anyInVpc ? '無伺服器服務（VPC 出口見各服務標籤）' : '無伺服器服務（不屬於任何 VPC）',
+      STYLES.sideTitle,
+      sideX,
+      sy,
+      S.sidebarW,
+      20
+    );
     sy += 26;
     serverless.forEach((s, i) => {
+      let route;
+      if (s.via === 'connector') {
+        route = `<br><font color="${GCP.green}">→ VPC ${s.vpc || `connector ${s.connector || '?'}`}<br>（VPC connector）</font>`;
+      } else if (s.via === 'Direct VPC egress') {
+        route = `<br><font color="${GCP.green}">→ VPC ${s.vpc || '?'}<br>（Direct VPC egress）</font>`;
+      } else {
+        route = `<br><font color="${GCP.faint}">不屬於任何 VPC</font>`;
+      }
+      const ing =
+        s.ingress === 'INGRESS_TRAFFIC_ALL'
+          ? `<br><font color="${GCP.red}">⚠ Ingress ALL（對外開放）</font>`
+          : s.ingress
+          ? `<br>Ingress ${String(s.ingress).replace('INGRESS_TRAFFIC_', '')}`
+          : '';
       pg.vertex(
         `sum-sl-${s.name}`,
         cloud,
-        `${s.name}<br>${s.kind}`,
+        `${s.name}<br>${s.kind}${ing}${route}`,
         s.kind === 'Cloud Run' ? STYLES.run : STYLES.fn,
         sideX + 10,
         sy + i * 130,
