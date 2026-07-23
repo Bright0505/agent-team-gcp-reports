@@ -699,6 +699,119 @@ else
   echo "  memcached-instances.md  略過（無 db/memcached-instances.json，Memcached API 未啟用或無執行個體）"
 fi
 
+# ── Pub/Sub topic／subscription 存取控制與資料流總表 ────────────────────
+# 來源：pubsub/topics.json（topics list，已含完整組態）＋ pubsub/subscriptions.json（subscriptions list，
+#      已含完整組態含 pushConfig）＋ pubsub/topic-iam/*.json／pubsub/sub-iam/*.json（逐一 get-iam-policy）。
+# 安全重點（見 gcp-docs-sec.md「Pub/Sub 存取控制與資料保護」）：
+#   (1) **push 訂閱的 pushConfig.pushEndpoint**：若指向外部 HTTP endpoint＝訊息資料對外流出，
+#       另看有無 pushConfig.oidcToken（對推送目標做 OIDC 驗證）——無驗證＝任何知道 endpoint 的人可偽造；
+#   (2) **topic／subscription 的 IAM 公開授權**：bindings 含 allUsers（網際網路任何人）／
+#       allAuthenticatedUsers（任何 Google 帳號）＝誰都能 publish／subscribe，比照 BigQuery dataset 公開授權；
+#   (3) **topic 的 messageStoragePolicy.allowedPersistenceRegions**：訊息落地 region 限制（資料主權治理）；
+#   (4) **CMEK**（topic 的 kmsKeyName）：是否用客戶自管金鑰加密訊息。
+# ⚠️ 空值語意：pubsub/topics.json **不存在**＝list 查詢失敗（API 未啟用／權限不足，資料缺口）；
+#    **存在但為 []**＝Pub/Sub API 已啟用但無任何 topic（有效證據，非資料缺口；2026-07-23 本專案實測即此情形，
+#    比照 AlloyDB／BigQuery）。兩者結論相反，不可混。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案無 topic／subscription，同 Cloud Run／App Engine／Filestore）；僅依官方
+#    Pub/Sub REST v1 projects.topics／projects.subscriptions schema 撰寫。防呆錨點是資源名（topic／subscription
+#    的 .name 解析不出來→印「⚠️ 欄位無法解析」讓斷言 FAIL），**絕不可默默印「未設定」**。
+#    傳遞方式依官方定義判別：pushConfig 有值＝push、bigqueryConfig 有值＝bigquery、cloudStorageConfig 有值＝
+#    cloudStorage，皆無＝pull（拉取）。messageStoragePolicy／kmsKeyName 缺席＝未限制／Google 管理（合法預設，非解析失敗）。
+# IAM 公開授權另用 input_filename 掃描 topic-iam／sub-iam 兩目錄（get-iam-policy 回傳不含資源名，靠檔名識別）。
+PS_TOPICS="$DATA/pubsub/topics.json"
+PS_SUBS="$DATA/pubsub/subscriptions.json"
+PS_TIAM="$DATA/pubsub/topic-iam"
+PS_SIAM="$DATA/pubsub/sub-iam"
+if [ -f "$PS_TOPICS" ]; then
+  {
+    echo "# Pub/Sub topic／subscription 存取控制與資料流總表"
+    echo ""
+    echo "來源：\`data/pubsub/topics.json\`（topics list）＋ \`data/pubsub/subscriptions.json\`（subscriptions list，"
+    echo "list 已回完整組態含 pushConfig）＋ \`data/pubsub/topic-iam/*.json\`／\`data/pubsub/sub-iam/*.json\`（逐一 get-iam-policy）。"
+    echo "此表為上述檔案的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**Pub/Sub 是全域資源、無傳統 VPC 網路歸屬**（除非用 VPC Service Controls，掃描不到）。安全重點："
+    echo "**push 訂閱的 \`pushConfig.pushEndpoint\`** 若指向外部 URL＝訊息資料對外流出，另看有無 \`oidcToken\` 驗證；"
+    echo "**IAM 公開授權**（\`allUsers\`／\`allAuthenticatedUsers\`）＝任何人可 publish／subscribe；"
+    echo "**\`messageStoragePolicy\`** 限制訊息落地地區（資料主權）；**CMEK**（\`kmsKeyName\`）為客戶自管加密。"
+    echo ""
+    PS_NT="$(jq -r 'length' "$PS_TOPICS" 2>/dev/null || echo 0)"
+    PS_NS="$(jq -r 'length' "$PS_SUBS" 2>/dev/null || echo 0)"
+    if [ "${PS_NT:-0}" -eq 0 ] && [ "${PS_NS:-0}" -eq 0 ]; then
+      echo "**本專案沒有任何 Pub/Sub topic 或 subscription**（Pub/Sub API 已啟用但未建立任何資源＝有效證據，不是資料缺口）。"
+    else
+      echo "## Topic（訊息儲存地區限制／CMEK）"
+      echo ""
+      if [ "${PS_NT:-0}" -eq 0 ]; then
+        echo "（本專案沒有任何 topic）"
+      else
+        echo "| Topic | 訊息儲存地區限制 | 傳輸強制同地區 | CMEK |"
+        echo "|---|---|---|---|"
+        jq -r '
+          .[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/") | last) as $id |
+          "| \($id) | " +
+          (((.messageStoragePolicy.allowedPersistenceRegions // []) | join(",")) | if . == "" then "未限制（可存於任何地區）" else . end) + " | " +
+          (if .messageStoragePolicy.enforceInTransit == true then "是" else "否／未設定" end) + " | " +
+          (if .kmsKeyName then "有" else "Google 管理" end) + " |"
+        ' "$PS_TOPICS"
+      fi
+      echo ""
+      echo "## Subscription（傳遞方式／push endpoint／驗證）"
+      echo ""
+      if [ "${PS_NS:-0}" -eq 0 ]; then
+        echo "（本專案沒有任何 subscription）"
+      else
+        echo "| Subscription | 綁定 Topic | 傳遞方式 | Push endpoint（對外資料流） | OIDC 驗證 | 死信 topic |"
+        echo "|---|---|---|---|---|---|"
+        jq -r '
+          .[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/") | last) as $id |
+          ((.topic // "—") | if . == "—" then "—" else (split("/") | last) end) as $topic |
+          (if (.pushConfig.pushEndpoint // "") != "" then "push" elif (.bigqueryConfig != null) then "bigquery" elif (.cloudStorageConfig != null) then "cloudStorage" else "pull" end) as $mode |
+          "| \($id) | \($topic) | \($mode) | " +
+          ((.pushConfig.pushEndpoint // "—") | if . == "—" then "—" else "**" + . + "**" end) + " | " +
+          (if (.pushConfig.pushEndpoint // "") == "" then "—" elif (.pushConfig.oidcToken.serviceAccountEmail // "") != "" then ("有（" + .pushConfig.oidcToken.serviceAccountEmail + "）") else "**無（未驗證推送目標）**" end) + " | " +
+          ((.deadLetterPolicy.deadLetterTopic // "—") | if . == "—" then "—" else (split("/") | last) end) + " |"
+        ' "$PS_SUBS"
+      fi
+      echo ""
+      echo "## ⚠️ IAM 公開／匿名授權（allUsers／allAuthenticatedUsers）"
+      echo ""
+      echo "誰能 publish／subscribe。含 \`allUsers\`／\`allAuthenticatedUsers\` 者屬資料外洩／濫發風險，等同 GCS 值區公開。"
+      echo ""
+      PS_PUBHDR=0
+      for f in "$PS_TIAM"/*.json "$PS_SIAM"/*.json; do
+        [ -f "$f" ] || continue
+        row="$(jq -r --arg f "$(basename "$f" -iam.json)" '
+          ([.bindings[]? | select((.members // []) | any(. == "allUsers" or . == "allAuthenticatedUsers")) | .role]) as $pub |
+          if ($pub | length) > 0 then "| \($f) | " + ($pub | join(", ")) + " |" else empty end' "$f" 2>/dev/null)"
+        if [ -n "$row" ]; then
+          if [ "$PS_PUBHDR" -eq 0 ]; then
+            echo "| 資源（topic／subscription） | 公開授權角色 |"
+            echo "|---|---|"
+            PS_PUBHDR=1
+          fi
+          echo "$row"
+        fi
+      done
+      [ "$PS_PUBHDR" -eq 0 ] && echo "無：所有 topic／subscription 的 IAM policy 皆無 allUsers／allAuthenticatedUsers 公開授權。"
+    fi
+  } > "$DIGEST/pubsub.md"
+  echo "  pubsub.md  $(wc -c < "$DIGEST/pubsub.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 topic／subscription 時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 資源時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/pubsub.md"; then
+    echo "    ❌ 斷言失敗：Pub/Sub topic／subscription 名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Pub/Sub 存取控制表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  pubsub.md  略過（無 pubsub/topics.json，Pub/Sub topics list 查詢失敗或 API 未啟用）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。

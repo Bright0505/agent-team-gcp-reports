@@ -31,7 +31,9 @@ model: opus
    **`digest/alloydb-clusters.md`**（AlloyDB cluster／instance 設定總表：公開 IP／授權外部網段／CMEK／PSC／備份；
    無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）、
    **`digest/memcached-instances.md`**（Memorystore Memcached 綁定的 `authorizedNetwork` VPC；Memcached API
-   未啟用或無執行個體時不存在）。
+   未啟用或無執行個體時不存在）、
+   **`digest/pubsub.md`**（Pub/Sub topic／subscription 存取控制與資料流：push endpoint 對外資料流／OIDC 驗證、
+   IAM 公開授權、訊息儲存地區限制、CMEK；無 topic／subscription 時該表會明寫「沒有任何 Pub/Sub topic 或 subscription」）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -118,6 +120,14 @@ model: opus
   VPC**——凡能連到該 VPC、且防火牆允許 Memcached 埠（11211）者即可存取快取，無額外驗證。重點看綁定 VPC
   的防火牆是否限制到 11211 埠來源；快取內容若含敏感資料，VPC 內的橫向存取即為風險面。Memcached API 未啟用時
   此檔不存在，屬資料缺口，寫「Memcached API 未啟用，無法評估」即可
+- **Pub/Sub 存取控制與資料流**（見 `digest/pubsub.md`）：三個重點——(1) **push 訂閱的
+  `pushConfig.pushEndpoint`**：指向外部 HTTP endpoint＝訊息資料對外流出，且若無 `pushConfig.oidcToken`
+  驗證（digest 標「**無（未驗證推送目標）**」）＝任何知道 endpoint 的人可偽造請求；(2) **topic／subscription
+  的 IAM 公開授權**：含 `allUsers`／`allAuthenticatedUsers` ＝任何人可 publish（濫發／注入）或 subscribe
+  （資料外洩），屬高嚴重度，等同 GCS 值區公開；(3) **資料保護**：topic 的 `messageStoragePolicy.allowedPersistenceRegions`
+  是否限制訊息落地地區（資料主權）、是否使用 **CMEK**（`kmsKeyName`；缺席＝Google 管理金鑰）。
+  ⚠️ 本專案掃描時無任何 topic／subscription（Pub/Sub API 已啟用但未建立資源＝有效證據，非資料缺口），
+  此項寫「本專案未建立 Pub/Sub topic 或 subscription」即可
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

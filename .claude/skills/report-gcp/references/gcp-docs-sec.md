@@ -79,6 +79,13 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Private IP overview（Private Services Access／PSC 私有連線）](https://docs.cloud.google.com/alloydb/docs/private-ip)
 - [About CMEK for AlloyDB（客戶自管加密金鑰）](https://docs.cloud.google.com/alloydb/docs/cmek)
 
+## Pub/Sub 存取控制與資料保護
+
+- [Access control with IAM for Pub/Sub（誰能 publish／subscribe；避免 allUsers／allAuthenticatedUsers）](https://docs.cloud.google.com/pubsub/docs/access-control)
+- [Authentication for push subscriptions（push endpoint 的 OIDC token 驗證）](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions)
+- [Configure message storage policies（訊息落地地區限制／資料主權）](https://docs.cloud.google.com/pubsub/docs/resource-location-restriction)
+- [Configure message encryption with CMEK for Pub/Sub（客戶自管加密金鑰）](https://docs.cloud.google.com/pubsub/docs/encryption)
+
 ## 稽核
 
 - [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit)
