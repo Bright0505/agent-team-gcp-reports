@@ -17,8 +17,13 @@ model: sonnet
    本支柱會用到的 digest：**`digest/cost-signals.md`**（Recommender 的機型建議＝Google 依實際用量
    算出的規格判斷，是本支柱最有力的量化依據）、`digest/backend-services.json`（Cloud CDN 是否啟用）、
    `digest/compute-instances.json`（機型與磁碟類型）、`digest/network-facts.md`（子網的
-   Private Google Access 與 Cloud NAT 覆蓋）。
-   其餘檔案（disks、gke-clusters、run-services、sql-detail、redis-instances 等）讀 `data/` 原始檔。
+   Private Google Access 與 Cloud NAT 覆蓋）、
+   **`digest/gke-clusters.json`**（GKE 叢集網路組態：VPC-native、私有節點——影響節點與 Google API
+   的存取路徑）、**`digest/run-services.json`**（Cloud Run 的 ingress／vpcAccess；本專案 Cloud Run
+   API 未啟用時此檔不存在，Cloud Run 的 CPU／記憶體／並行度等效能欄位仍需讀原始 describe）、
+   **`digest/filestore-instances.md`**（Filestore 層級＝效能層級與檔案共用容量；Filestore API 未啟用或無執行個體時不存在）。
+   其餘檔案（disks、gke-clusters 原始 describe、run-services 原始 describe、sql-detail、
+   redis-instances 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/performance.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-perf.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
    **不要為了確認連結有效而 WebFetch**——連結有效性由流程階段⑤的 check-links.sh 統一確定性檢查，
@@ -33,7 +38,7 @@ model: sonnet
 
 | 官方核心原則 | 本流程如何評估 |
 |---|---|
-| Plan resource allocation | VM 機型世代、磁碟類型與容量對應的 IOPS、Cloud SQL 機型與儲存類型、GKE 節點機型 |
+| Plan resource allocation | VM 機型世代、磁碟類型與容量對應的 IOPS、Cloud SQL 機型與儲存類型、GKE 節點機型、Filestore 層級與容量（吞吐量隨容量成長） |
 | Take advantage of elasticity | MIG／GKE 自動調度、Cloud Run 並行度與最小執行個體（冷啟動） |
 | Promote modular design | **屬架構設計面，唯讀掃描只看得到有限訊號**（服務數量與拆分程度），多數情況列入掃描範圍外 |
 | Continuously monitor and improve performance | Cloud SQL Query Insights、Cloud Trace／Profiler 的 API 啟用狀態、Cloud CDN 是否啟用 |
@@ -49,6 +54,10 @@ model: sonnet
 **儲存效能**
 - 永久磁碟類型：`pd-standard` → `pd-balanced`／`pd-ssd`（基準效能差異大）
 - 磁碟大小與 IOPS 上限的關係（PD 的 IOPS 隨容量成長）
+- **Filestore 層級與容量**（見 `digest/filestore-instances.md`）：`tier` 決定效能層級
+  （BASIC_HDD 最低、BASIC_SSD／ENTERPRISE／REGIONAL 較高），且 Filestore 的**吞吐量與 IOPS 隨配置容量
+  成長**——容量偏低會同時壓低效能。若有 `performanceConfig`（自訂 IOPS）須一併核對。Filestore API 未啟用
+  時此檔不存在，屬資料缺口，寫「Filestore API 未啟用，無法評估」即可
 
 **資料庫效能**
 - Cloud SQL 機型世代與儲存類型（HDD vs SSD）、是否啟用儲存自動擴展

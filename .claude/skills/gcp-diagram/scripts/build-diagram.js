@@ -171,6 +171,8 @@ function loadModel() {
   const gkesRaw = readListOptional('compute/gke-clusters.json', 'GKE 叢集');
   const runsRaw = readListOptional('compute/run-services.json', 'Cloud Run 服務');
   const fnsRaw = readListOptional('compute/functions.json', 'Cloud Functions');
+  // Serverless VPC Access connector：Cloud Run 走 connector 出 VPC 時，要反查它綁定的網路。
+  const vpcConnectors = readListOptional('network/vpc-connectors.json', 'Serverless VPC Access connector');
   const frsRaw = readListOptional('lb/forwarding-rules.json', '轉送規則（負載平衡前端）');
   const bssRaw = readListOptional('lb/backend-services.json', '後端服務');
   const urlMaps = readListOptional('lb/url-maps.json', 'URL 對應');
@@ -525,6 +527,34 @@ function loadModel() {
     }))
     .sort(byName);
 
+  // ── Cloud Run 服務的 VPC 歸屬（修正「一律畫成不屬於任何 VPC」的誤判）──
+  // 清單層級（run-services.json）**沒有** vpcAccess，先前因此把所有 Cloud Run 都畫成
+  // 「無伺服器服務（不屬於任何 VPC）」——這正是使用者截圖抓到的錯誤結論。改讀
+  // digest/run-services.json（scan.sh 逐服務 describe → digest.sh 投影）判斷 VPC 出口：
+  //   vpcAccess.connector          → 走 Serverless VPC Access connector，反查 connector 綁的網路
+  //   vpcAccess.networkInterfaces  → Direct VPC egress，直接取 networkInterfaces[].network
+  // 兩者皆無才是真正「不屬於任何 VPC」。反查不到 connector 綁定網路時 vpc 留 null，標籤另註 connector 名。
+  const runsDigest = readJsonMaybe(DATA('digest', 'run-services.json')) || [];
+  const runsByName = new Map(runsDigest.map((r) => [r.name, r]));
+  const runs = runsRaw.map((s) => {
+    const name = s.name || (s.metadata || {}).name || '?';
+    const dg = runsByName.get(name) || {};
+    const va = dg.vpcAccess || {};
+    const connector = va.connector ? last(va.connector) : null;
+    const directNets = uniq((va.networkInterfaces || []).map((ni) => last(ni.network)).filter(Boolean));
+    let via = null;
+    let vpc = null;
+    if (connector) {
+      via = 'connector';
+      const c = vpcConnectors.find((x) => last(x.name) === connector);
+      vpc = c ? last(c.network) : null;
+    } else if (directNets.length) {
+      via = 'Direct VPC egress';
+      vpc = directNets[0];
+    }
+    return { name, kind: 'Cloud Run', ingress: dg.ingress || null, connector, directNets, via, vpc };
+  });
+
   // ---- VPC 網路：把上面所有東西掛到各自的網路上 ----
   const networks = networksRaw
     .map((n) => {
@@ -611,7 +641,7 @@ function loadModel() {
     orphanSqls,
     buckets,
     addresses,
-    runs: runsRaw,
+    runs,
     functions: fnsRaw,
     governance,
     denyRules,
@@ -1033,9 +1063,11 @@ function buildSummary(model, sd) {
     ['組織政策（專案層）', g.orgPolicies],
     ['IAM 服務帳戶', g.serviceAccounts],
   ];
+  // model.runs 已在 loadModel 依 digest/run-services.json 標好 vpcAccess 歸屬（via／vpc）；
+  // 有 VPC 出口者不再籠統畫成「不屬於任何 VPC」，而是標出路由方式與 VPC。
   const serverless = [
-    ...model.runs.map((s) => ({ name: s.name || (s.metadata || {}).name || '?', kind: 'Cloud Run' })),
-    ...model.functions.map((s) => ({ name: last(s.name) || '?', kind: 'Cloud Functions' })),
+    ...model.runs.map((s) => ({ name: s.name, kind: 'Cloud Run', via: s.via, vpc: s.vpc, ingress: s.ingress })),
+    ...model.functions.map((s) => ({ name: last(s.name) || '?', kind: 'Cloud Functions', via: null, vpc: null })),
   ];
   const sideH =
     46 +
@@ -1104,13 +1136,39 @@ function buildSummary(model, sd) {
   sy += model.buckets.length * 130 + 14;
 
   if (serverless.length) {
-    pg.vertex('sum-side-sl', cloud, '無伺服器服務（不屬於任何 VPC）', STYLES.sideTitle, sideX, sy, S.sidebarW, 20);
+    // 標題不再一律寫「不屬於任何 VPC」——那是先前的誤判。只有真的無 VPC 出口的服務才屬於這類；
+    // 有 connector／Direct VPC egress 的服務會在自己的標籤上標出路由方式與 VPC。
+    const anyInVpc = serverless.some((s) => s.via);
+    pg.vertex(
+      'sum-side-sl',
+      cloud,
+      anyInVpc ? '無伺服器服務（VPC 出口見各服務標籤）' : '無伺服器服務（不屬於任何 VPC）',
+      STYLES.sideTitle,
+      sideX,
+      sy,
+      S.sidebarW,
+      20
+    );
     sy += 26;
     serverless.forEach((s, i) => {
+      let route;
+      if (s.via === 'connector') {
+        route = `<br><font color="${GCP.green}">→ VPC ${s.vpc || `connector ${s.connector || '?'}`}<br>（VPC connector）</font>`;
+      } else if (s.via === 'Direct VPC egress') {
+        route = `<br><font color="${GCP.green}">→ VPC ${s.vpc || '?'}<br>（Direct VPC egress）</font>`;
+      } else {
+        route = `<br><font color="${GCP.faint}">不屬於任何 VPC</font>`;
+      }
+      const ing =
+        s.ingress === 'INGRESS_TRAFFIC_ALL'
+          ? `<br><font color="${GCP.red}">⚠ Ingress ALL（對外開放）</font>`
+          : s.ingress
+          ? `<br>Ingress ${String(s.ingress).replace('INGRESS_TRAFFIC_', '')}`
+          : '';
       pg.vertex(
         `sum-sl-${s.name}`,
         cloud,
-        `${s.name}<br>${s.kind}`,
+        `${s.name}<br>${s.kind}${ing}${route}`,
         s.kind === 'Cloud Run' ? STYLES.run : STYLES.fn,
         sideX + 10,
         sy + i * 130,

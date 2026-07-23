@@ -31,6 +31,26 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access)
 - [VPC Service Controls overview](https://docs.cloud.google.com/vpc-service-controls/docs/overview)
 
+## 無伺服器網路安全性（Cloud Run）
+
+- [Restrict network endpoint ingress for Cloud Run services](https://docs.cloud.google.com/run/docs/securing/ingress)
+- [Private networking and Cloud Run](https://docs.cloud.google.com/run/docs/securing/private-networking)
+- [Connect to a VPC network with Direct VPC egress](https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc)
+- [Configure Serverless VPC Access](https://docs.cloud.google.com/vpc/docs/serverless-vpc-access)
+
+## App Engine 網路安全性（Ingress 控制與 VPC 連線）
+
+- [Ingress settings（App Engine standard，服務層 ingress 控制）](https://docs.cloud.google.com/appengine/docs/standard/ingress-settings)
+- [Ingress settings（App Engine flexible）](https://docs.cloud.google.com/appengine/docs/flexible/ingress-settings)
+- [Connecting to a VPC network（App Engine standard，Serverless VPC Access connector）](https://docs.cloud.google.com/appengine/docs/standard/connecting-vpc)
+- [REST Resource: apps.services（networkSettings.ingressTrafficAllowed 欄位定義）](https://docs.cloud.google.com/appengine/docs/admin-api/reference/rest/v1/apps.services)
+
+## GKE 網路隔離與私有叢集
+
+- [About network isolation in GKE](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/network-isolation)
+- [Customize your network isolation in GKE](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/latest/network-isolation)
+- [Best practices for GKE networking](https://docs.cloud.google.com/kubernetes-engine/docs/best-practices/networking)
+
 ## 資料保護
 
 - [Uniform bucket-level access](https://docs.cloud.google.com/storage/docs/uniform-bucket-level-access)
@@ -41,6 +61,15 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Configure private IP for Cloud SQL](https://docs.cloud.google.com/sql/docs/mysql/configure-private-ip)
 - [Authorize with authorized networks](https://docs.cloud.google.com/sql/docs/mysql/authorize-networks)
 - [SSL policies for load balancers](https://docs.cloud.google.com/load-balancing/docs/ssl-policies-concepts)
+- [Filestore access control（NFS 匯出選項：ipRanges／accessMode／squashMode，控制誰能掛載）](https://docs.cloud.google.com/filestore/docs/access-control)
+- [Filestore networking（VPC 綁定／Private Service Access，無公開 IP）](https://docs.cloud.google.com/filestore/docs/networking)
+- [Customer-managed encryption keys for Filestore（CMEK）](https://docs.cloud.google.com/filestore/docs/cmek)
+
+## BigQuery 資料存取控制
+
+- [Control access to BigQuery resources with IAM](https://docs.cloud.google.com/bigquery/docs/control-access-to-resources-iam)
+- [Customer-managed Cloud KMS keys for BigQuery](https://docs.cloud.google.com/bigquery/docs/customer-managed-encryption)
+- [BigQuery locations（資料所在地／資料主權）](https://docs.cloud.google.com/bigquery/docs/locations)
 
 ## 稽核
 

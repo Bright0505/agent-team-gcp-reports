@@ -39,7 +39,8 @@ CLAUDE.md 那三個「GCP 最容易誤判之處」，正是這張圖每一個版
 - 必要：`data/scan-meta.json`、`data/network/networks.json`、`data/network/subnets.json`、
   `data/network/firewall-rules.json`、`data/compute/instances.json`
   （後者缺檔時退回 `data/digest/compute-instances.json`）
-- 選配：`network/routers.json`、`network/addresses.json`、
+- 選配：`network/routers.json`、`network/addresses.json`、`network/vpc-connectors.json`
+  （Serverless VPC Access connector，用於反查 Cloud Run 走 connector 進哪個 VPC）、
   `compute/instance-groups.json`（受管）、`compute/instance-groups-all.json`（含未受管，
   **負載平衡器的後端常是未受管群組，少了它流量鏈會斷**）、
   `compute/gke-clusters.json`、`compute/run-services.json`、`compute/functions.json`、
@@ -47,6 +48,10 @@ CLAUDE.md 那三個「GCP 最容易誤判之處」，正是這張圖每一個版
   `db/sql-instances.json`、`storage/buckets.json`、
   `ops/{dns-zones,logging-sinks,monitoring-policies,uptime-checks}.json`、
   `global/{org-policies,iam-service-accounts}.json`
+- 選配 digest 投影（由 `digest.sh` 產生，用於補足清單層級查不到的網路欄位）：
+  **`digest/run-services.json`**（Cloud Run 的 `ingress`／`vpcAccess`——判斷服務路由進哪個 VPC，
+  取代只有清單層級、無 vpcAccess 的 `compute/run-services.json`；不存在時 Cloud Run 一律畫「不屬於任何 VPC」）、
+  **`digest/gke-clusters.json`**（GKE 私有叢集／VPC-native／主控授權網段）
 
 **「空回應」與「查詢失敗」是相反的結論**（CLAUDE.md 的鐵則，本腳本照做）：
 選配檔案**存在但是 `[]`** ＝ 該類資源確實不存在，圖上照實畫「未設定」；
