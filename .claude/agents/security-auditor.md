@@ -16,7 +16,8 @@ model: opus
    **可直接引用為證據**。
    本支柱會用到的 digest：**`digest/network-facts.md`**（跨檔關聯的網路事實：防火牆規則的**實際暴露面**、
    VM 對外路徑、Cloud SQL 的實際可及性、**第四段「無伺服器資源的網路路徑」**——Cloud Run 的 Ingress
-   ＋VPC egress 歸屬，這些是確定性算出的結論，**必讀**）、
+   ＋VPC egress 歸屬、**第五段「AlloyDB 的實際可及性」**——公開 IP × 授權外部網段的暴露判定，
+   這些是確定性算出的結論，**必讀**）、
    **`digest/iam-policy.md`**（角色 → 成員總表，已標出基本角色與公開授權）、
    **`digest/gcs-buckets.md`**（值區設定總表：PAP／UBLA／版本控制／CMEK）、
    **`digest/bigquery-datasets.md`**（BigQuery dataset 存取控制總表：公開／匿名授權、location、CMEK；
@@ -26,7 +27,19 @@ model: opus
    **`digest/run-services.json`**（Cloud Run ingress／vpcAccess；本專案 API 未啟用時不存在）、
    **`digest/appengine-services.json`**（App Engine 服務層 ingress＝`networkSettings.ingressTrafficAllowed`）與
    **`digest/appengine-versions.json`**（App Engine 版本層 VPC connector／network／env；未建立 App Engine 應用時兩者皆不存在）、
-   **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）。
+   **`digest/filestore-instances.md`**（Filestore NFS 匯出存取控制／綁定 VPC／CMEK；Filestore API 未啟用或無執行個體時不存在）、
+   **`digest/alloydb-clusters.md`**（AlloyDB cluster／instance 設定總表：公開 IP／授權外部網段／CMEK／PSC／備份；
+   無 cluster 時該表會明寫「沒有任何 AlloyDB cluster」）、
+   **`digest/memcached-instances.md`**（Memorystore Memcached 綁定的 `authorizedNetwork` VPC；Memcached API
+   未啟用或無執行個體時不存在）、
+   **`digest/pubsub.md`**（Pub/Sub topic／subscription 存取控制與資料流：push endpoint 對外資料流／OIDC 驗證、
+   IAM 公開授權、訊息儲存地區限制、CMEK；無 topic／subscription 時該表會明寫「沒有任何 Pub/Sub topic 或 subscription」）、
+   **`digest/dataflow-jobs.md`**（Dataflow job 的 worker 公開 IP 暴露面／worker 網路歸屬（VPC）／CMEK；**此表是掃描當下即時快照、
+   非期別歷史**；Dataflow API 未啟用時此檔不存在＝資料缺口）、
+   **`digest/dataproc-clusters.md`**（Dataproc cluster 的 worker 公開 IP 暴露面（`internalIpOnly`）／worker 網路歸屬（VPC）／
+   worker 服務帳戶／CMEK／Kerberos；Dataproc API 未啟用時此檔不存在＝資料缺口）、
+   **`digest/vertex-endpoints.md`**（Vertex AI Endpoint 的**對外暴露判定**（`network`／`privateServiceConnectConfig` 皆無＝
+   公開端點）／VPC 歸屬／CMEK；無 endpoint 時該表會明寫「沒有任何 Vertex AI Endpoint」，Vertex AI API 未啟用時此檔不存在＝資料缺口）。
    其餘檔案（firewall-rules、sa-detail、org-policies、ssl-policies 等）讀 `data/` 原始檔。
 2. 依 `.claude/skills/report-gcp/templates/finding-format.md` 的格式，輸出 `findings/security.md`
 3. 建議引用官方文件時，**從 `.claude/skills/report-gcp/references/gcp-docs-sec.md` 取用**；引用 Well-Architected Framework 總論或跨支柱的入口連結時，改讀 `.claude/skills/report-gcp/references/gcp-docs-common.md`（該檔另含連結的使用規則）（該檔連結已驗證有效）。
@@ -44,10 +57,10 @@ model: opus
 | 官方核心原則 | 本流程如何評估 |
 |---|---|
 | Implement security by design | 由組態證據間接評估：防火牆的實際暴露面、IAM 最小權限、加密與 SSL 設定 |
-| Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 授權網路。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
+| Implement zero trust | IAP 是否啟用（`digest/backend-services.json` 的 `iap`）、最小權限、Cloud SQL 與 AlloyDB 的公開 IP／授權外部網段。**VPC Service Controls 需組織層權限，屬掃描範圍外** |
 | Implement shift-left security | 屬 CI/CD 流程面，**唯讀掃描評估不到**，列入掃描範圍外 |
 | Implement preemptive cyber defense | Cloud Armor 安全政策、組織政策。**Security Command Center 需組織層權限，屬掃描範圍外** |
-| Use AI securely and responsibly | 專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
+| Use AI securely and responsibly | Vertex AI Endpoint 的對外暴露判定（`digest/vertex-endpoints.md`：`network`／`privateServiceConnectConfig` 皆無＝公開端點）＋CMEK。專案若無 AI／ML 工作負載，**須明寫「本專案不適用」**，不可略過不提 |
 | Use AI for security | 同上，明寫不適用或未採用 |
 | Meet regulatory, compliance, and privacy needs | 可查：稽核記錄、資料所在區域、CMEK。**法遵要求本身需業務輸入，屬掃描範圍外** |
 
@@ -90,6 +103,12 @@ model: opus
 **資料保護**
 - Cloud Storage：`publicAccessPrevention` 是否 `enforced`、UBLA 是否啟用、有無 CMEK
 - Cloud SQL：public IP × `authorizedNetworks` × SSL 模式（三者一起看，判定見 network-facts.md）
+- **AlloyDB 對外暴露**（見 `digest/network-facts.md` 第五段與 `digest/alloydb-clusters.md`）：instance 層
+  `networkConfig.enablePublicIp` 是否開啟、`authorizedExternalNetworks[].cidrRange` 是否含 `0.0.0.0/0`
+  （公開 IP ＋ 授權 0.0.0.0/0 ＝全網際網路可連，屬高嚴重度，等同 Cloud SQL 的 authorizedNetworks 0.0.0.0/0，
+  network-facts 已算出判定，**不得降級**）；另看 cluster 是否使用 **CMEK**（`encryptionConfig.kmsKeyName`；
+  缺席＝Google 管理金鑰）與是否走 PSC／Private Services Access 私有連線。⚠️ 本專案掃描時無任何 cluster
+  （有效證據，非資料缺口），此項寫「本專案未建立 AlloyDB cluster」即可
 - **BigQuery dataset 存取控制**（見 `digest/bigquery-datasets.md`）：dataset 的 `access[]` 是否含
   **公開／匿名授權**（`iamMember: allUsers`＝網際網路任何人；`iamMember/specialGroup: allAuthenticatedUsers`
   ＝任何 Google 帳號）——這是 BigQuery 資料外洩的最高風險，等同 GCS 值區公開。另看資料所在 `location`
@@ -102,6 +121,43 @@ model: opus
   「全部用戶端可讀寫、NO_ROOT_SQUASH」**（最寬鬆），digest 已標出。另看綁定 VPC 的防火牆是否限制到
   NFS 埠（2049）、以及是否使用 CMEK（`kmsKeyName`）。Filestore API 未啟用時此檔不存在，屬資料缺口，
   寫「Filestore API 未啟用，無法評估」即可
+- **Memorystore Memcached 網路存取控制**（見 `digest/memcached-instances.md`）：Memcached **無公開 IP、
+  無 IAM 層驗證**（不像 Cloud SQL／AlloyDB 有授權外部網段），存取控制**完全依賴綁定的 `authorizedNetwork`
+  VPC**——凡能連到該 VPC、且防火牆允許 Memcached 埠（11211）者即可存取快取，無額外驗證。重點看綁定 VPC
+  的防火牆是否限制到 11211 埠來源；快取內容若含敏感資料，VPC 內的橫向存取即為風險面。Memcached API 未啟用時
+  此檔不存在，屬資料缺口，寫「Memcached API 未啟用，無法評估」即可
+- **Pub/Sub 存取控制與資料流**（見 `digest/pubsub.md`）：三個重點——(1) **push 訂閱的
+  `pushConfig.pushEndpoint`**：指向外部 HTTP endpoint＝訊息資料對外流出，且若無 `pushConfig.oidcToken`
+  驗證（digest 標「**無（未驗證推送目標）**」）＝任何知道 endpoint 的人可偽造請求；(2) **topic／subscription
+  的 IAM 公開授權**：含 `allUsers`／`allAuthenticatedUsers` ＝任何人可 publish（濫發／注入）或 subscribe
+  （資料外洩），屬高嚴重度，等同 GCS 值區公開；(3) **資料保護**：topic 的 `messageStoragePolicy.allowedPersistenceRegions`
+  是否限制訊息落地地區（資料主權）、是否使用 **CMEK**（`kmsKeyName`；缺席＝Google 管理金鑰）。
+  ⚠️ 本專案掃描時無任何 topic／subscription（Pub/Sub API 已啟用但未建立資源＝有效證據，非資料缺口），
+  此項寫「本專案未建立 Pub/Sub topic 或 subscription」即可
+- **Dataflow worker 網路暴露與加密**（見 `digest/dataflow-jobs.md`）：三個重點——(1) **worker 公開 IP**
+  （`ipConfiguration`）：`WORKER_IP_PRIVATE` 以外（含未指定＝**預設有公開 IP**）＝worker VM 有對外 IP，是常見的
+  非必要對外暴露面，應改用 `--no-use-public-ips`（關閉後須在子網啟用 Private Google Access），digest 已把有公開 IP
+  的 job 以粗體標「**有公開 IP（暴露面）**」；(2) **worker 網路歸屬**（`network`／`subnetwork`）：worker 跑在哪個
+  VPC／子網，決定其可及的內部資源，未指定＝跑在 default 網路（治理訊號）；(3) **CMEK**（`serviceKmsKeyName`；
+  缺席＝Google 管理金鑰）。⚠️ **此表是掃描當下的即時快照、非期別歷史**（Dataflow job 有生命週期，已清除的舊 job
+  不會出現），判讀時以「當下狀態」理解。Dataflow API 未啟用時此檔不存在，屬資料缺口，寫「Dataflow API 未啟用，無法評估」即可
+- **Dataproc worker 網路暴露與加密**（見 `digest/dataproc-clusters.md`）：五個重點——(1) **worker 公開 IP**
+  （`config.gceClusterConfig.internalIpOnly`）：⚠️ 官方**僅 image 2.2.x 預設 true**、其餘版本預設 false 且欄位可能缺席，
+  故 digest **保守判定**只有 `internalIpOnly=true` 才算私有、其餘一律標「**可能有公開 IP（暴露面）**」——引用時據此下發現、
+  建議改用 `--no-address`／`internalIpOnly=true`（須先在子網啟用 Private Google Access）；(2) **worker 網路歸屬**
+  （`networkUri`／`subnetworkUri`）：cluster 跑在哪個 VPC／子網；(3) **worker 服務帳戶**（`serviceAccount`）：用預設
+  Compute SA 或掛過大角色即過度授權（比照 VM 的預設 SA 判斷）；(4) **CMEK**（`gcePdKmsKeyName`）；(5) **叢集內驗證**
+  （`kerberosConfig.enableKerberos`）：未啟用＝叢集內元件間無 Kerberos 認證。Dataproc API 未啟用時此檔不存在，屬資料缺口，
+  寫「Dataproc API 未啟用，無法評估」即可
+- **Vertex AI Endpoint 對外暴露**（見 `digest/vertex-endpoints.md`）——這是 Vertex AI 最大的安全風險點，
+  也是官方「Use AI securely and responsibly」原則的核心組態證據：模型推論端點若對公網開放＝資料與模型外洩面。
+  三個重點——(1) **端點對外暴露**：`network`（VPC peering／Private Service Access）與 `privateServiceConnectConfig`
+  （PSC）**互斥**，**兩者皆無＝公開端點**（有公開 REST/gRPC 端點，網際網路可及）；digest 已保守把非明確私有者標
+  「**公開端點（暴露面）**」，引用時據此下發現、建議改用 PSC 或 Private Service Access 私有化；(2) **VPC 歸屬**
+  （`network`）：走 VPC peering 時綁定哪個 VPC；(3) **CMEK**（`encryptionSpec.kmsKeyName`；缺席＝Google 管理金鑰）。
+  ⚠️ 本專案掃描時無任何 endpoint（有效證據，非資料缺口），此項寫「本專案未建立 Vertex AI Endpoint」即可；
+  Vertex AI API 未啟用時此檔不存在，屬資料缺口，寫「Vertex AI API 未啟用，無法評估」即可。
+  （本項也直接回應 WAF 原則表的「Use AI securely and responsibly」：專案無此類端點時須明寫「本專案不適用」，不可略過）
 - KMS 金鑰輪替設定
 - 負載平衡器的 SSL 政策版本（避免舊版 TLS）與是否強制 HTTPS
 

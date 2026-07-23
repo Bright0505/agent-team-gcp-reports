@@ -30,6 +30,7 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Cloud Armor security policy overview](https://docs.cloud.google.com/armor/docs/security-policy-overview)
 - [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access)
 - [VPC Service Controls overview](https://docs.cloud.google.com/vpc-service-controls/docs/overview)
+- [Memorystore for Memcached networking（authorizedNetwork VPC 綁定／private services access，無公開 IP、無 IAM 驗證）](https://docs.cloud.google.com/memorystore/docs/memcached/networking)
 
 ## 無伺服器網路安全性（Cloud Run）
 
@@ -70,6 +71,41 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Control access to BigQuery resources with IAM](https://docs.cloud.google.com/bigquery/docs/control-access-to-resources-iam)
 - [Customer-managed Cloud KMS keys for BigQuery](https://docs.cloud.google.com/bigquery/docs/customer-managed-encryption)
 - [BigQuery locations（資料所在地／資料主權）](https://docs.cloud.google.com/bigquery/docs/locations)
+
+## AlloyDB 網路安全性與加密
+
+- [Connect using public IP（公開 IP 連線；生產環境不建議開放）](https://docs.cloud.google.com/alloydb/docs/connect-public-ip)
+- [Connect to a cluster from outside its VPC（授權外部網段 authorized external networks）](https://docs.cloud.google.com/alloydb/docs/connect-external)
+- [Private IP overview（Private Services Access／PSC 私有連線）](https://docs.cloud.google.com/alloydb/docs/private-ip)
+- [About CMEK for AlloyDB（客戶自管加密金鑰）](https://docs.cloud.google.com/alloydb/docs/cmek)
+
+## Pub/Sub 存取控制與資料保護
+
+- [Access control with IAM for Pub/Sub（誰能 publish／subscribe；避免 allUsers／allAuthenticatedUsers）](https://docs.cloud.google.com/pubsub/docs/access-control)
+- [Authentication for push subscriptions（push endpoint 的 OIDC token 驗證）](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions)
+- [Configure message storage policies（訊息落地地區限制／資料主權）](https://docs.cloud.google.com/pubsub/docs/resource-location-restriction)
+- [Configure message encryption with CMEK for Pub/Sub（客戶自管加密金鑰）](https://docs.cloud.google.com/pubsub/docs/encryption)
+
+## Dataflow worker 網路安全性與加密
+
+- [Specify a network and subnetwork（worker VM 的 network／subnetwork VPC 歸屬）](https://docs.cloud.google.com/dataflow/docs/guides/specifying-networks)
+- [Configure internet access and firewall rules（關閉 worker 公開 IP：--no-use-public-ips／Private Google Access）](https://docs.cloud.google.com/dataflow/docs/guides/routes-firewall)
+- [Access control with IAM for Dataflow（誰能提交／管理 job）](https://docs.cloud.google.com/dataflow/docs/concepts/access-control)
+- [Use customer-managed encryption keys for Dataflow（CMEK）](https://docs.cloud.google.com/dataflow/docs/guides/customer-managed-encryption-keys)
+
+## Dataproc worker 網路安全性與加密
+
+- [Dataproc cluster network configuration（networkUri／subnetworkUri／internal IP only）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/network)
+- [Dataproc service accounts（worker VM 用的 serviceAccount 與最小權限）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/service-accounts)
+- [Customer-managed encryption keys for Dataproc（CMEK：gcePdKmsKeyName）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/customer-managed-encryption)
+- [Dataproc security configuration（Kerberos／secure multi-tenancy）](https://docs.cloud.google.com/dataproc/docs/concepts/configuring-clusters/security)
+
+## Vertex AI Endpoint 對外暴露與加密
+
+- [Choose an endpoint type（公開端點 vs 私有端點：公開推論端點的網際網路暴露面）](https://docs.cloud.google.com/vertex-ai/docs/predictions/choose-endpoint-type)
+- [Use private services access endpoints for online inference（`network` VPC peering 私有化）](https://docs.cloud.google.com/vertex-ai/docs/predictions/using-private-endpoints)
+- [About accessing Vertex AI through Private Service Connect endpoints（`privateServiceConnectConfig` PSC 私有化）](https://docs.cloud.google.com/vertex-ai/docs/general/psc-endpoints)
+- [Customer-managed encryption keys for Vertex AI（CMEK：encryptionSpec.kmsKeyName）](https://docs.cloud.google.com/vertex-ai/docs/general/cmek)
 
 ## 稽核
 

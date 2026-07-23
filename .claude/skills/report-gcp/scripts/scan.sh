@@ -317,6 +317,44 @@ run "db/bigtable-instances" bigtable instances list "${P[@]}"
 run "db/firestore-databases" firestore databases list "${P[@]}"
 run "db/redis-instances"    redis instances list --region - "${P[@]}"
 
+# Memorystore for Memcached（Memorystore 的另一個引擎，與上方 Redis 同族；區域性資源，用 --region -
+# 萬用查詢跨全部區域，同 Redis）。
+# ⚠️ 空狀態行為（2026-07-23 實測 本專案）：memcache.googleapis.com **未啟用**時，
+#    `memcache instances list --region -` 回**標準的** SERVICE_DISABLED（「Cloud Memorystore for
+#    Memcached API has not been used ... before or it is disabled」，reason=SERVICE_DISABLED，exit 1），
+#    這**符合** run() 的 FAILED 分類（→ digest 的 scan-gaps.md 正確歸為「資料缺口：API 未啟用」）；
+#    比照 Filestore／AlloyDB，**不是** App Engine 那種需特殊比對的錯誤訊息。API 啟用但無 instance 時
+#    回標準 `[]`（→ EMPTY／未設定）。兩種空狀態都遵循標準 gcloud 慣例，故走**標準 run()**、不需自訂空判斷。
+#    （互動式會先跳「是否啟用 API？(y/N)」提示，但本檔已設 CLOUDSDK_CORE_DISABLE_PROMPTS=1，不會卡住。）
+# ⚠️ Memcached 與 Redis 同屬 Memorystore、**無公開 IP 的概念**：只能透過綁定的 authorizedNetwork VPC
+#    以 private services access 存取。`list --format=json` 已回**完整 Instance 資源**（含 authorizedNetwork／
+#    zones／nodeCount／nodeConfig／memcacheVersion／state），比照 Redis／Filestore 不需逐一 describe。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 API 未啟用，list 回 SERVICE_DISABLED、迴圈實跑 0 筆）；
+#    僅依官方 Memcached REST v1 Instance schema 撰寫，digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+run "db/memcached-instances" memcache instances list --region - "${P[@]}"
+
+# AlloyDB（cluster → instance 兩層結構；區域性資源，用 --region - 萬用查詢跨全部區域）
+# ⚠️ 空狀態行為（2026-07-23 實測 本專案）：AlloyDB API（alloydb.googleapis.com）**已啟用**、
+#    但**無任何 cluster** 時，`alloydb clusters list --region -` 回**標準空陣列** `[]`＋exit 0
+#    （不是 App Engine 那種特殊訊息，也不是 Filestore 的 SERVICE_DISABLED）。故走**標準 run()**，
+#    EMPTY 分類正確、不需自訂空判斷（比照 BigQuery：API 已啟用但無資源＝有效證據，非資料缺口）。
+# cluster／instance 的 .name 是完整資源路徑
+#   projects/{P}/locations/{region}/clusters/{cid}[/instances/{iid}]
+#   → 逐一 describe 需要 region（[3]）與短 id（cluster=[5]、instance=[7]），故從 name 解析。
+# ⚠️ 欄位路徑（含 .name 是否為完整路徑）**未經真實資料驗證**——本專案無 cluster，迴圈實跑 0 次；
+#    僅依官方 AlloyDB REST v1 clusters／instances schema 撰寫。
+run "db/alloydb-clusters"  alloydb clusters list --region - "${P[@]}"
+mkdir -p "$DATA/db/alloydb-detail"
+while IFS=$'\t' read -r acregion acid; do
+  [ -z "$acid" ] && continue
+  run "db/alloydb-detail/$acid-cluster"    alloydb clusters describe "$acid" --region "$acregion" "${P[@]}"
+  run "db/alloydb-detail/$acid-instances"  alloydb instances list --cluster "$acid" --region "$acregion" "${P[@]}"
+  while IFS= read -r aiid; do
+    [ -z "$aiid" ] && continue
+    run "db/alloydb-detail/$acid-$aiid-instance" alloydb instances describe "$aiid" --cluster "$acid" --region "$acregion" "${P[@]}"
+  done < <(jq -r '.[]?.name // empty | split("/") | last' "$DATA/db/alloydb-detail/$acid-instances.json" 2>/dev/null)
+done < <(jq -r '.[]? | select(.name != null) | [ (.name | split("/")[3]), (.name | split("/")[5]) ] | @tsv' "$DATA/db/alloydb-clusters.json" 2>/dev/null)
+
 echo "=== 資料分析（BigQuery）==="
 # BigQuery 唯讀掃描：用原生 bq CLI（bq ls／bq show），不用 gcloud alpha bq，因此無法套用上方的 run()
 # （run() 固定呼叫 gcloud）。以下為本節專屬的唯讀 list＋逐一 describe 區塊。
@@ -361,6 +399,71 @@ else
   rm -f "$BQ_DS"
 fi
 rm -f "$BQ_ERR"
+
+echo "=== 訊息與事件（Pub/Sub）==="
+# Pub/Sub 是**全域資源**（不像 Cloud Run／Redis／AlloyDB 有區域性），list **不需要** --region -。
+# ⚠️ 空狀態行為（2026-07-23 實測 本專案）：pubsub.googleapis.com **已啟用**、但無任何
+#    topic／subscription 時，`pubsub topics list`／`subscriptions list` 回**標準空陣列** `[]`＋exit 0
+#    （與 AlloyDB／BigQuery 同情形＝有效證據，非資料缺口）。故走**標準 run()**、EMPTY 分類正確、
+#    不需 App Engine／BigQuery 那種自訂空判斷。（Pub/Sub 常為預設啟用，本專案即已啟用但未建立任何資源。）
+# ⚠️ `list --format=json` 已回**完整資源**（topic 含 kmsKeyName／messageStoragePolicy；subscription 含
+#    pushConfig／bigqueryConfig／cloudStorageConfig／deadLetterPolicy 等），比照 Filestore／Memcached
+#    不需逐一 describe 拿組態。唯一 list 拿不到的是**存取控制（IAM policy）**——誰能 publish／subscribe、
+#    有沒有 allUsers／allAuthenticatedUsers 公開授權，這要逐一 get-iam-policy（唯讀，允許）。
+# ⚠️ topic／subscription 的 .name 是完整路徑（projects/{P}/topics/{短名}、projects/{P}/subscriptions/{短名}），
+#    取 last 當短名餵 get-iam-policy。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案無 topic／subscription，get-iam-policy 迴圈實跑 0 次）；僅依官方
+#    Pub/Sub REST v1 projects.topics／projects.subscriptions schema 撰寫（pushConfig.pushEndpoint／
+#    pushConfig.oidcToken.serviceAccountEmail／messageStoragePolicy.allowedPersistenceRegions／kmsKeyName），
+#    digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。Pub/Sub 無傳統 VPC 網路歸屬（除非 VPC Service Controls，
+#    掃不到），故不進 network-facts.py；push 訂閱指向外部 URL 的「對外資料流」由 digest 的 pubsub.md 呈現。
+run "pubsub/topics" pubsub topics list "${P[@]}"
+mkdir -p "$DATA/pubsub/topic-iam"
+while IFS= read -r pstopic; do
+  [ -z "$pstopic" ] && continue
+  run "pubsub/topic-iam/$pstopic-iam" pubsub topics get-iam-policy "$pstopic" "${P[@]}"
+done < <(jq -r '.[]?.name // empty | split("/") | last' "$DATA/pubsub/topics.json" 2>/dev/null)
+
+run "pubsub/subscriptions" pubsub subscriptions list "${P[@]}"
+mkdir -p "$DATA/pubsub/sub-iam"
+while IFS= read -r pssub; do
+  [ -z "$pssub" ] && continue
+  run "pubsub/sub-iam/$pssub-iam" pubsub subscriptions get-iam-policy "$pssub" "${P[@]}"
+done < <(jq -r '.[]?.name // empty | split("/") | last' "$DATA/pubsub/subscriptions.json" 2>/dev/null)
+
+echo "=== 資料處理（Dataflow）==="
+# Dataflow job 是**有生命週期的執行實體**（不像 topic／instance 是長存資源）：`dataflow jobs list` 回的是
+# **掃描當下的即時快照**（預設彙整各區域的 active 與近期 job），**非期別內的歷史 job 全集**——已清除的
+# 舊 batch job 不會出現。此與本專案「期別＝已結束週期的快照」精神一致，但 digest 會註明是即時狀態、非期別歷史。
+# ⚠️ 空狀態的**特殊坑**（2026-07-24 本專案 本專案 實測，與 Filestore／Memcached **相反**）：
+#    `gcloud dataflow jobs list` 在 **dataflow.googleapis.com 未啟用時仍回標準空陣列 `[]`＋exit 0**
+#    （不是 Filestore／Memcached 的 SERVICE_DISABLED，也不是 App Engine 的特殊訊息）。若直接走 run()，
+#    API 未啟用會被誤歸成 EMPTY（「未設定／無資源」）——這是**相反的結論**（實為資料缺口：API 未啟用），
+#    違反本專案鐵則。故本段**自訂判斷**：先讀已掃描的 global/services-enabled.json 確認 API 是否啟用
+#    （本機 jq 處理 data/ 檔，不碰 GCP）——未啟用即記 FAILED（reason 含 SERVICE_DISABLED，讓 scan-gaps
+#    正確歸「資料缺口：API 未啟用」，比照 Filestore／Memcached）；啟用才跑 jobs list（此時 `[]` 才是
+#    真正的「未設定／無 job」＝有效證據）。
+# ⚠️ jobs list 只回摘要（id／name／type／currentState／location），**worker 網路組態要 describe --full 才有**
+#    （不加 --full 只回 summary view，無 environment）；describe 的 --region 預設 us-central1，故必須帶上
+#    每個 job 的 .location（其 regional endpoint），否則跨區 job 會查不到。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 API 未啟用，describe 迴圈實跑 0 次，同 Cloud Run／App Engine 等）；
+#    worker 網路欄位（environment.workerPools[].network／subnetwork／ipConfiguration、environment.serviceKmsKeyName）
+#    僅依官方 Dataflow v1b3 Job／Environment／WorkerPool schema 撰寫，digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+mkdir -p "$DATA/dataflow"
+if jq -e '[.[]?.config.name] | any(. == "dataflow.googleapis.com")' "$DATA/global/services-enabled.json" > /dev/null 2>&1; then
+  run "dataflow/jobs" dataflow jobs list "${P[@]}"
+  # 逐一 describe --full（拿 environment.workerPools 網路組態）；--region 取自 job 的 .location（regional endpoint）
+  mkdir -p "$DATA/dataflow/job-detail"
+  while IFS=$'\t' read -r dfid dfloc; do
+    [ -z "$dfid" ] && continue
+    [ -z "$dfloc" ] && continue
+    run "dataflow/job-detail/$dfid-describe" dataflow jobs describe "$dfid" --full --region "$dfloc" "${P[@]}"
+  done < <(jq -r '.[]? | [(.id // empty), (.location // empty)] | @tsv' "$DATA/dataflow/jobs.json" 2>/dev/null)
+else
+  # API 未啟用：jobs list 會靜默回 [] 掩蓋真實狀態，故不呼叫、直接記為資料缺口（reason 含 SERVICE_DISABLED）
+  echo "  fail  dataflow/jobs (dataflow.googleapis.com 未啟用；jobs list 會靜默回 [] 掩蓋，故記資料缺口)"
+  echo "FAILED: dataflow/jobs :: reason=Dataflow API (dataflow.googleapis.com) is disabled / has not been used (SERVICE_DISABLED); dataflow jobs list silently returns [] so it is recorded as a data gap not unset :: gcloud dataflow jobs list" >> "$ERRLOG"
+fi
 
 echo "=== 儲存 ==="
 # GCS 一次呼叫就含 iamConfiguration（PAP／UBLA）／versioning／lifecycle／encryption，
@@ -460,6 +563,77 @@ while IFS= read -r R; do
   run "ops/kms-keyrings-$R" kms keyrings list --location "$R" "${P[@]}"
 done < "$DATA/active-regions.txt"
 
+# ── 資料處理（Dataproc）───────────────────────────────────────────────
+# Dataproc（受管 Hadoop／Spark）叢集是**區域性**資源。放在此處而非上方「=== 資料處理（Dataflow）===」，
+# 是因為它需要**逐一具體 region 查詢**，得先有 active-regions.txt（在上方 Recommender 前置才算出）。
+# ⚠️ 位置查法（2026-07-24 本專案 本專案 實測）：`dataproc clusters list` **不支援 `--region -`**
+#    （會回 `Permission denied on 'locations/-'`），必須帶具體 region，故逐一 active region 查。
+# ⚠️ 空狀態（與 Dataflow **不同**、與 Filestore／Memcached **相同**）：帶具體 region 時，API 未啟用回**標準的**
+#    SERVICE_DISABLED（「Cloud Dataproc API has not been used ... or it is disabled」，exit≠0）——**沒有** Dataflow
+#    那種「未啟用仍靜默回 []」的陷阱。但為避免對每個 active region 各噴一次 SERVICE_DISABLED（同一 API 的重複雜訊），
+#    仍比照 Dataflow 先讀已掃描的 global/services-enabled.json 做**啟用預檢**（本機 jq、不碰 GCP）：未啟用即記一筆
+#    資料缺口就跳過；啟用才逐 region 跑 clusters list。
+# ⚠️ `clusters list --format=json` 已回**完整 Cluster 資源**（含 config.gceClusterConfig／encryptionConfig／
+#    securityConfig），比照 Filestore 不另開 describe 迴圈。多個 region 檔於下方合併成 clusters-all.json 供 digest／inventory 讀。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 dataproc.googleapis.com 未啟用，list 實跑 0 次）；worker 網路欄位
+#    （config.gceClusterConfig.networkUri／subnetworkUri／internalIpOnly／serviceAccount／tags、
+#    config.encryptionConfig.gcePdKmsKeyName、config.securityConfig.kerberosConfig.enableKerberos）僅依官方
+#    Dataproc v1 Cluster／GceClusterConfig schema 撰寫，digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+mkdir -p "$DATA/dataproc"
+if jq -e '[.[]?.config.name] | any(. == "dataproc.googleapis.com")' "$DATA/global/services-enabled.json" > /dev/null 2>&1; then
+  while IFS= read -r R; do
+    [ -z "$R" ] && continue
+    run "dataproc/clusters-$R" dataproc clusters list --region "$R" "${P[@]}"
+  done < "$DATA/active-regions.txt"
+  # 合併各 region 的叢集清單成單一檔（inventory／digest 讀它；add 串接陣列，無檔時給空陣列）
+  if ls "$DATA/dataproc"/clusters-*.json > /dev/null 2>&1; then
+    jq -s 'add // []' "$DATA/dataproc"/clusters-*.json > "$DATA/dataproc/clusters-all.json"
+  fi
+else
+  # API 未啟用：不逐 region 呼叫（否則每個 region 各噴一次 SERVICE_DISABLED），直接記一筆資料缺口
+  echo "  fail  dataproc/clusters (dataproc.googleapis.com 未啟用，記資料缺口；跳過逐 region 查詢)"
+  echo "FAILED: dataproc/clusters :: reason=Cloud Dataproc API (dataproc.googleapis.com) is disabled / has not been used (SERVICE_DISABLED) :: gcloud dataproc clusters list --region <每個 active region>" >> "$ERRLOG"
+fi
+
+# ── AI／ML（Vertex AI Endpoint 對外暴露與網路歸屬）─────────────────────
+# 聚焦**單一核心安全面：Vertex AI Endpoint 的對外暴露**——模型推論端點若對公網開放＝資料與模型外洩面，
+# 是本服務最大的安全風險點。**不納入** featurestore／pipeline／training job／Workbench（超出「網路暴露面」主軸）。
+# 放此處（active-regions.txt 算出後）而非上方資料處理段，因它需要逐一具體 region 查（同 Dataproc）。
+# ⚠️ 位置查法（2026-07-24 本專案 本專案 實測）：Vertex AI Endpoint 是**區域性**資源，且
+#    `ai endpoints list` **不支援 `--region -`**（會被當成 endpoint override → `https://--aiplatform.googleapis.com/`
+#    無效 URI 而報錯，同 Cloud Run／Dataproc）。故逐一 active region 查。
+# ⚠️ 空狀態（2026-07-24 實測，與 Dataproc／Filestore **相同**、與 Dataflow 陷阱 **相反**）：aiplatform.googleapis.com
+#    **未啟用**時，`ai endpoints list --region <R>` 在 CLOUDSDK_CORE_DISABLE_PROMPTS=1 下回 **exit≠0**＋stderr 含
+#    標準 SERVICE_DISABLED（「Agent Platform API has not been used ... or it is disabled」，reason=SERVICE_DISABLED）——
+#    **沒有** Dataflow 那種「未啟用仍 exit 0 回 []」的陷阱（stdout 雖仍印 []，但 run() 先看 exit code 走 fail 分支）。
+#    但因逐 region 查、且 Vertex 每次 list 的 stderr **首行固定是「Using endpoint [...]」**（run() 的 FAILED reason
+#    只取首行會失真、scan-gaps 的 SERVICE_DISABLED 樣式比對不到），故比照 Dataproc 先讀 services-enabled.json 做
+#    **啟用預檢**（本機 jq、不碰 GCP）：未啟用即記一筆資料缺口（reason 明寫 SERVICE_DISABLED）就跳過逐 region loop；
+#    啟用才逐 region 跑（此時 `[]` 才是真正的「未設定／無 endpoint」＝有效證據）。
+# ⚠️ 公開端點判定（本 Phase 審查重點）：`network`（VPC peering／Private Service Access）與
+#    `privateServiceConnectConfig`（PSC）**互斥**，**兩者皆無＝公開端點**（有公開 REST/gRPC 端點＝暴露面）。
+#    `list --format=json` 回的是**完整 Endpoint 資源**（ListEndpointsResponse.endpoints[] 為完整物件，含 network／
+#    privateServiceConnectConfig／encryptionSpec），比照 Dataproc **不需逐一 describe**；多 region 檔合併成 endpoints-all.json。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 API 未啟用，list 實跑 0 次，同 Cloud Run／Dataproc 等）；worker 無關，
+#    僅依官方 Vertex AI v1 projects.locations.endpoints schema 撰寫（network／privateServiceConnectConfig.enablePrivateServiceConnect／
+#    encryptionSpec.kmsKeyName），digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
+mkdir -p "$DATA/vertex"
+if jq -e '[.[]?.config.name] | any(. == "aiplatform.googleapis.com")' "$DATA/global/services-enabled.json" > /dev/null 2>&1; then
+  while IFS= read -r R; do
+    [ -z "$R" ] && continue
+    run "vertex/endpoints-$R" ai endpoints list --region "$R" "${P[@]}"
+  done < "$DATA/active-regions.txt"
+  # 合併各 region 的 endpoint 清單成單一檔（inventory／digest 讀它；add 串接陣列，無檔時給空陣列）
+  if ls "$DATA/vertex"/endpoints-*.json > /dev/null 2>&1; then
+    jq -s 'add // []' "$DATA/vertex"/endpoints-*.json > "$DATA/vertex/endpoints-all.json"
+  fi
+else
+  # API 未啟用：不逐 region 呼叫（否則每個 region 各噴一次 SERVICE_DISABLED，且首行「Using endpoint」會讓
+  # FAILED reason 失真），直接記一筆資料缺口
+  echo "  fail  vertex/endpoints (aiplatform.googleapis.com 未啟用，記資料缺口；跳過逐 region 查詢)"
+  echo "FAILED: vertex/endpoints :: reason=Vertex AI API (aiplatform.googleapis.com) is disabled / has not been used (SERVICE_DISABLED) :: gcloud ai endpoints list --region <每個 active region>" >> "$ERRLOG"
+fi
+
 # ── 掃描中繼資料 ─────────────────────────────────────────────────────
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 METRICS_START="$(date -u -v-14d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-14 days' +%Y-%m-%dT%H:%M:%SZ)"
@@ -493,7 +667,7 @@ jqlen() {  # $1=檔案  $2=jq 運算式  → 長度（檔不存在/錯誤時 0�
 
 write_inventory() {
   local INV="$DATA/inventory.md"
-  local n_net n_sub n_fw n_vm n_mig n_ig n_disk n_snap n_gke n_run n_fn n_ae n_lb n_be n_sql n_bq n_bucket n_fs n_sa n_alert n_zone
+  local n_net n_sub n_fw n_vm n_mig n_ig n_disk n_snap n_gke n_run n_fn n_ae n_lb n_be n_sql n_alloydb n_memcached n_bq n_bucket n_fs n_sa n_alert n_zone n_pstopic n_pssub n_dataflow n_dataproc n_vertex
   n_net="$(jqlen "$DATA/network/networks.json" '.')"
   n_sub="$(jqlen "$DATA/network/subnets.json" '.')"
   n_fw="$(jqlen "$DATA/network/firewall-rules.json" '.')"
@@ -509,7 +683,14 @@ write_inventory() {
   n_lb="$(jqlen "$DATA/lb/forwarding-rules.json" '.')"
   n_be="$(jqlen "$DATA/lb/backend-services.json" '.')"
   n_sql="$(jqlen "$DATA/db/sql-instances.json" '.')"
+  n_alloydb="$(jqlen "$DATA/db/alloydb-clusters.json" '.')"
+  n_memcached="$(jqlen "$DATA/db/memcached-instances.json" '.')"
   n_bq="$(jqlen "$DATA/bigquery/datasets.json" '.')"
+  n_pstopic="$(jqlen "$DATA/pubsub/topics.json" '.')"
+  n_pssub="$(jqlen "$DATA/pubsub/subscriptions.json" '.')"
+  n_dataflow="$(jqlen "$DATA/dataflow/jobs.json" '.')"
+  n_dataproc="$(jqlen "$DATA/dataproc/clusters-all.json" '.')"
+  n_vertex="$(jqlen "$DATA/vertex/endpoints-all.json" '.')"
   n_bucket="$(jqlen "$DATA/storage/buckets.json" '.')"
   n_fs="$(jqlen "$DATA/storage/filestore-instances.json" '.')"
   n_sa="$(jqlen "$DATA/global/iam-service-accounts.json" '.')"
@@ -549,7 +730,14 @@ write_inventory() {
     echo "| 轉送規則（負載平衡前端） | $n_lb |"
     echo "| 後端服務 | $n_be |"
     echo "| Cloud SQL 執行個體 | $n_sql |"
+    echo "| AlloyDB cluster | $n_alloydb |"
+    echo "| Memorystore Memcached 執行個體 | $n_memcached |"
     echo "| BigQuery dataset | $n_bq |"
+    echo "| Pub/Sub topic | $n_pstopic |"
+    echo "| Pub/Sub subscription | $n_pssub |"
+    echo "| Dataflow job（掃描當下 active／近期，非期別歷史） | $n_dataflow |"
+    echo "| Dataproc cluster | $n_dataproc |"
+    echo "| Vertex AI Endpoint | $n_vertex |"
     echo "| Cloud Storage 值區 | $n_bucket |"
     echo "| Filestore 執行個體 | $n_fs |"
     echo "| 服務帳戶 | $n_sa |"

@@ -532,6 +532,563 @@ else
   echo "  filestore-instances.md  略過（無 storage/filestore-instances.json，Filestore API 未啟用或無執行個體）"
 fi
 
+# ── AlloyDB cluster／instance 設定總表 ─────────────────────────────────
+# 來源：db/alloydb-clusters.json（clusters list 索引）＋ db/alloydb-detail/*-cluster.json（cluster describe）
+#      ＋ db/alloydb-detail/*-instance.json（instance describe）。cluster→instance 兩層。
+# 一次看完：cluster 綁定 VPC／備份（automated＋continuous）／CMEK／PSC，與 instance 型別（PRIMARY／
+# READ_POOL）／可用性（ZONAL／REGIONAL）／公開 IP／授權外部網段（安全暴露面）／read pool 節點數（讀取冗餘）。
+# ⚠️ 空值語意：db/alloydb-clusters.json **不存在**＝clusters list 查詢失敗（權限不足，資料缺口）；
+#    **存在但為 []**＝AlloyDB API 已啟用但專案無任何 cluster（有效證據，非資料缺口；2026-07-23 本專案實測即此情形，
+#    比照 BigQuery）。兩者結論相反，不可混。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案無 cluster，同 Cloud Run／App Engine／Filestore）；僅依官方 AlloyDB
+#    REST v1 clusters／instances schema。防呆錨點是 cluster／instance 的 .name（解析不出來→「⚠️ 欄位無法解析」
+#    →斷言 FAIL），絕不可默默印「未設定」。公開 IP（networkConfig.enablePublicIp）缺席＝合法預設 false
+#    （非解析失敗，比照 GKE enablePrivateNodes 缺席補預設）；備份政策缺席以「?」表示、不臆測預設值。
+# 另外產出 digest/alloydb-instances.json 供 network-facts.py 算「公開 IP × 授權外部網段」的確定性可及性判定
+#（比照 Cloud SQL——同為託管資料庫的對外暴露面，需 deterministic 判定避免 LLM 降級）。
+AD_LIST="$DATA/db/alloydb-clusters.json"
+AD_DETAIL="$DATA/db/alloydb-detail"
+if [ -f "$AD_LIST" ]; then
+  {
+    echo "# AlloyDB cluster／instance 設定總表"
+    echo ""
+    echo "來源：\`data/db/alloydb-clusters.json\`（clusters list 索引）＋ \`data/db/alloydb-detail/*-cluster.json\`"
+    echo "（cluster describe）＋ \`data/db/alloydb-detail/*-instance.json\`（instance describe）。"
+    echo "此表為上述檔案的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**公開 IP ＋ 授權外部網段是 AlloyDB 的對外安全暴露面**（instance 層 \`networkConfig.enablePublicIp\`／"
+    echo "\`authorizedExternalNetworks[].cidrRange\`）：公開 IP 開啟＋授權 \`0.0.0.0/0\` ＝全網際網路可連，屬高嚴重度"
+    echo "（判定見 \`digest/network-facts.md\` 第 5 段）。**可用性**看 instance 的 \`availabilityType\`：\`REGIONAL\`＝"
+    echo "跨可用區高可用、\`ZONAL\`＝單一可用區無備援。**備份**分兩種：\`automatedBackupPolicy\`（排程完整備份）與"
+    echo "\`continuousBackupConfig\`（連續備份／PITR）。\`CMEK\` 欄為「Google 管理」代表未使用客戶自管金鑰。"
+    echo ""
+    if [ "$(jq -r 'length' "$AD_LIST" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 AlloyDB cluster**（AlloyDB API 已啟用但未建立任何 cluster＝有效證據，不是資料缺口）。"
+    elif [ -d "$AD_DETAIL" ] && ls "$AD_DETAIL"/*-cluster.json > /dev/null 2>&1; then
+      echo "## Cluster（VPC 綁定／備份／CMEK）"
+      echo ""
+      echo "| Cluster | 區域 | 資料庫版本 | 綁定 VPC | 保留網段 | PSC | 自動備份 | 持續備份 | CMEK |"
+      echo "|---|---|---|---|---|---|---|---|---|"
+      jq -rs '.[] |
+        ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+        ($p | last) as $id |
+        (if ($p | length) >= 6 then $p[3] else "?" end) as $region |
+        ((.networkConfig.network // .network // "") | if . == "" then "—" else (split("/") | last) end) as $vpc |
+        "| \($id) | \($region) | \(.databaseVersion // "?") | \($vpc) | \(.networkConfig.allocatedIpRange // "—") | " +
+        (if .pscConfig.pscEnabled == true then "啟用" else "未啟用" end) + " | " +
+        (if .automatedBackupPolicy.enabled == true then "啟用" elif (.automatedBackupPolicy | type) == "object" then "**停用**" else "?" end) + " | " +
+        (if .continuousBackupConfig.enabled == true then "啟用" elif (.continuousBackupConfig | type) == "object" then "**停用**" else "?" end) + " | " +
+        (if .encryptionConfig.kmsKeyName then "有" else "Google 管理" end) + " |"
+      ' "$AD_DETAIL"/*-cluster.json
+      echo ""
+      echo "## Instance（型別／可用性／公開 IP 暴露面／read pool）"
+      echo ""
+      if ls "$AD_DETAIL"/*-instance.json > /dev/null 2>&1; then
+        echo "| Instance | Cluster | 型別 | 可用性 | 公開 IP | 授權外部網段 | PSC | read pool 節點數 | 私有 IP |"
+        echo "|---|---|---|---|---|---|---|---|---|"
+        jq -rs '.[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+          ($p | last) as $id |
+          (if ($p | length) >= 6 then $p[5] else "?" end) as $cid |
+          (.networkConfig.enablePublicIp // false) as $pub |
+          [ (.networkConfig.authorizedExternalNetworks // [])[] | .cidrRange // empty ] as $authnets |
+          "| \($id) | \($cid) | \(.instanceType // "?") | \(.availabilityType // "?") | " +
+          (if $pub then "**是**" else "否" end) + " | " +
+          (if ($authnets | length) > 0 then (if ($authnets | any(. == "0.0.0.0/0")) then "**" + ($authnets | join(",")) + "**" else ($authnets | join(",")) end) else "—" end) + " | " +
+          (if (has("pscInstanceConfig")) then "啟用" else "未啟用" end) + " | " +
+          ((.readPoolConfig.nodeCount // "—") | tostring) + " | " +
+          (.ipAddress // "—") + " |"
+        ' "$AD_DETAIL"/*-instance.json
+      else
+        echo "（cluster 存在但未取得任何 instance describe——請查 \`data/scan-errors.log\`）"
+      fi
+    else
+      echo "⚠️ **alloydb-clusters.json 列出 cluster，但 alloydb-detail/ 沒有對應 describe 檔**——describe 可能失敗，"
+      echo "請查 \`data/scan-errors.log\`（此為資料缺口，不可當成「沒有 cluster」）。"
+    fi
+  } > "$DIGEST/alloydb-clusters.md"
+  echo "  alloydb-clusters.md  $(wc -c < "$DIGEST/alloydb-clusters.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 cluster／instance 時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 cluster 時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/alloydb-clusters.md"; then
+    echo "    ❌ 斷言失敗：AlloyDB cluster／instance 名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ AlloyDB 設定表產生成功（未出現「欄位無法解析」）"
+  fi
+  # network-facts.py 用的機器可讀投影：instance 層公開 IP × 授權外部網段（確定性可及性判定）。
+  # 空值語意要三分（不可把「有 cluster 但 instance describe 失敗」與「0 cluster」都寫成空 []）：
+  #   有 instance describe 檔 → 正常投影；
+  #   有 cluster 但無任何 instance describe（describe 失敗＝資料缺口）→ 寫哨兵物件，讓 network-facts 印「資料缺口」
+  #     而非「沒有任何 instance」（後者會沉默低報安全結論）——判斷條件比照上方 markdown 的「未取得 instance describe」警示；
+  #   0 cluster → 寫 []，讓 network-facts 印「沒有任何 instance＝有效證據」。
+  AD_NCLUSTER="$(jq -r 'length' "$AD_LIST" 2>/dev/null || echo 0)"
+  if [ -d "$AD_DETAIL" ] && ls "$AD_DETAIL"/*-instance.json > /dev/null 2>&1; then
+    jq -s '[ .[] |
+      ((.name // "") | split("/")) as $p |
+      {
+        name: ($p | last),
+        cluster: (if ($p | length) >= 6 then $p[5] else "?" end),
+        region: (if ($p | length) >= 6 then $p[3] else "?" end),
+        instanceType: (.instanceType // null),
+        availabilityType: (.availabilityType // null),
+        enablePublicIp: (.networkConfig.enablePublicIp // false),
+        authorizedExternalNetworks: [ (.networkConfig.authorizedExternalNetworks // [])[] | .cidrRange // empty ],
+        psc: (has("pscInstanceConfig")),
+        nodeCount: (.readPoolConfig.nodeCount // null),
+        ipAddress: (.ipAddress // null)
+      } ]' "$AD_DETAIL"/*-instance.json > "$DIGEST/alloydb-instances.json"
+  elif [ "${AD_NCLUSTER:-0}" -gt 0 ]; then
+    # 有 cluster 但取不到任何 instance describe＝資料缺口（describe 失敗）：寫 network-facts.py 能辨識的哨兵物件，
+    # 不可寫空 []（會被誤判成「沒有任何 instance＝有效證據」）。
+    echo '[{"_gap": "alloydb_instance_describe_failed"}]' > "$DIGEST/alloydb-instances.json"
+  else
+    echo "[]" > "$DIGEST/alloydb-instances.json"
+  fi
+else
+  echo "  alloydb-clusters.md  略過（無 db/alloydb-clusters.json，AlloyDB clusters list 查詢失敗或權限不足）"
+fi
+
+# ── Memorystore for Memcached 執行個體設定總表 ─────────────────────────
+# 來源：db/memcached-instances.json（gcloud memcache instances list --region - --format=json；list 已回完整資源）。
+# 一張表看完：位置、版本、狀態、綁定 VPC（authorizedNetwork＝網路歸屬）、節點可用區分布（zones＝可用區冗餘）、
+# 節點數（nodeCount）、每節點規格（nodeConfig.cpuCount／memorySizeMb）。可靠性重點在 zones 與 nodeCount：
+# 節點集中單一可用區＝該 zone 故障即全失；節點數越多、單一節點故障失去的資料越少（官方建議見 gcp-docs-rel.md）。
+# ⚠️ 空值語意：db/memcached-instances.json **不存在**＝list 查詢失敗（API 未啟用／權限不足，資料缺口）；
+#    **存在但為 []**＝專案真的沒有任何 Memcached 執行個體（有效證據）。兩者結論相反，不可混。
+# ⚠️ 本專案 memcache.googleapis.com 未啟用（list 回 SERVICE_DISABLED＝資料缺口，檔案不存在→本段優雅略過），
+#    此段欄位路徑**未經真實資料驗證**（同 Cloud Run／Filestore／AlloyDB 情形），僅依官方 Memcached REST v1
+#    Instance schema 撰寫。防呆錨點是**執行個體名**（.name 解析不出來→印「⚠️ 欄位無法解析」讓斷言 FAIL），
+#    **絕不可默默印「未設定」**。zones 官方定義為陣列、缺席補「—」；nodeConfig 缺席補 "?"。
+# ⚠️ Memcached **無公開 IP 的概念**（同 Redis）：只能透過綁定的 authorizedNetwork VPC 以 private services
+#    access 存取，故不進 network-facts.py 的網際網路暴露判定（VPC 綁定是單檔事實，比照 Filestore；見該檔第 1 段的註）。
+MC_SRC="$DATA/db/memcached-instances.json"
+if [ -f "$MC_SRC" ]; then
+  {
+    echo "# Memorystore for Memcached 執行個體設定總表"
+    echo ""
+    echo "來源：\`data/db/memcached-instances.json\`（gcloud memcache instances list --region - --format=json，list 已回完整資源）。"
+    echo "此表為該檔的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**Memcached 無公開 IP 的概念**（同 Redis）：只能透過綁定的 **authorizedNetwork** VPC 以 private services"
+    echo "access 存取，可及性完全取決於該 VPC 內部路由與防火牆。**可靠性**看兩個欄位：\`zones\`（節點的可用區"
+    echo "分布——集中單一可用區＝該 zone 故障即全失，跨多可用區才有容錯）與 \`nodeCount\`（節點數越多、單一節點"
+    echo "故障失去的資料越少）。\`nodeConfig\` 為每節點的 vCPU／記憶體規格。"
+    echo ""
+    if [ "$(jq -r 'length' "$MC_SRC" 2>/dev/null || echo 0)" -eq 0 ]; then
+      echo "**本專案沒有任何 Memorystore Memcached 執行個體**（gcloud 回空清單＝有效證據，不是資料缺口）。"
+    else
+      echo "| 執行個體 | 位置 | 版本 | 狀態 | 綁定 VPC | 節點可用區分布 | 節點數 | 每節點規格 |"
+      echo "|---|---|---|---|---|---|---|---|"
+      jq -r '
+        .[] |
+        ((.name // "⚠️ 欄位無法解析") | split("/")) as $p |
+        ($p | last) as $id |
+        (if ($p | length) >= 4 then $p[3] else "?" end) as $loc |
+        "| \($id) | \($loc) | \(.memcacheVersion // "?") | \(.state // "?") | " +
+        ((.authorizedNetwork // "") | if . == "" then "—" else (split("/") | last) end) + " | " +
+        (((.zones // []) | join(",")) | if . == "" then "**未指定（由 Google 自動分布）**" else . end) + " | " +
+        ((.nodeCount // "?") | tostring) + " | " +
+        ((.nodeConfig.cpuCount // "?") | tostring) + " vCPU／" + ((.nodeConfig.memorySizeMb // "?") | tostring) + " MB |"
+      ' "$MC_SRC"
+    fi
+  } > "$DIGEST/memcached-instances.md"
+  echo "  memcached-instances.md  $(wc -c < "$MC_SRC") → $(wc -c < "$DIGEST/memcached-instances.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有執行個體時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 執行個體時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/memcached-instances.md"; then
+    echo "    ❌ 斷言失敗：Memcached 執行個體名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Memcached 執行個體表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  memcached-instances.md  略過（無 db/memcached-instances.json，Memcached API 未啟用或無執行個體）"
+fi
+
+# ── Pub/Sub topic／subscription 存取控制與資料流總表 ────────────────────
+# 來源：pubsub/topics.json（topics list，已含完整組態）＋ pubsub/subscriptions.json（subscriptions list，
+#      已含完整組態含 pushConfig）＋ pubsub/topic-iam/*.json／pubsub/sub-iam/*.json（逐一 get-iam-policy）。
+# 安全重點（見 gcp-docs-sec.md「Pub/Sub 存取控制與資料保護」）：
+#   (1) **push 訂閱的 pushConfig.pushEndpoint**：若指向外部 HTTP endpoint＝訊息資料對外流出，
+#       另看有無 pushConfig.oidcToken（對推送目標做 OIDC 驗證）——無驗證＝任何知道 endpoint 的人可偽造；
+#   (2) **topic／subscription 的 IAM 公開授權**：bindings 含 allUsers（網際網路任何人）／
+#       allAuthenticatedUsers（任何 Google 帳號）＝誰都能 publish／subscribe，比照 BigQuery dataset 公開授權；
+#   (3) **topic 的 messageStoragePolicy.allowedPersistenceRegions**：訊息落地 region 限制（資料主權治理）；
+#   (4) **CMEK**（topic 的 kmsKeyName）：是否用客戶自管金鑰加密訊息。
+# ⚠️ 空值語意：pubsub/topics.json **不存在**＝list 查詢失敗（API 未啟用／權限不足，資料缺口）；
+#    **存在但為 []**＝Pub/Sub API 已啟用但無任何 topic（有效證據，非資料缺口；2026-07-23 本專案實測即此情形，
+#    比照 AlloyDB／BigQuery）。兩者結論相反，不可混。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案無 topic／subscription，同 Cloud Run／App Engine／Filestore）；僅依官方
+#    Pub/Sub REST v1 projects.topics／projects.subscriptions schema 撰寫。防呆錨點是資源名（topic／subscription
+#    的 .name 解析不出來→印「⚠️ 欄位無法解析」讓斷言 FAIL），**絕不可默默印「未設定」**。
+#    傳遞方式依官方定義判別：pushConfig 有值＝push、bigqueryConfig 有值＝bigquery、cloudStorageConfig 有值＝
+#    cloudStorage，皆無＝pull（拉取）。messageStoragePolicy／kmsKeyName 缺席＝未限制／Google 管理（合法預設，非解析失敗）。
+# IAM 公開授權另用 input_filename 掃描 topic-iam／sub-iam 兩目錄（get-iam-policy 回傳不含資源名，靠檔名識別）。
+PS_TOPICS="$DATA/pubsub/topics.json"
+PS_SUBS="$DATA/pubsub/subscriptions.json"
+PS_TIAM="$DATA/pubsub/topic-iam"
+PS_SIAM="$DATA/pubsub/sub-iam"
+if [ -f "$PS_TOPICS" ]; then
+  {
+    echo "# Pub/Sub topic／subscription 存取控制與資料流總表"
+    echo ""
+    echo "來源：\`data/pubsub/topics.json\`（topics list）＋ \`data/pubsub/subscriptions.json\`（subscriptions list，"
+    echo "list 已回完整組態含 pushConfig）＋ \`data/pubsub/topic-iam/*.json\`／\`data/pubsub/sub-iam/*.json\`（逐一 get-iam-policy）。"
+    echo "此表為上述檔案的確定性投影，可直接引用為證據。"
+    echo ""
+    echo "**Pub/Sub 是全域資源、無傳統 VPC 網路歸屬**（除非用 VPC Service Controls，掃描不到）。安全重點："
+    echo "**push 訂閱的 \`pushConfig.pushEndpoint\`** 若指向外部 URL＝訊息資料對外流出，另看有無 \`oidcToken\` 驗證；"
+    echo "**IAM 公開授權**（\`allUsers\`／\`allAuthenticatedUsers\`）＝任何人可 publish／subscribe；"
+    echo "**\`messageStoragePolicy\`** 限制訊息落地地區（資料主權）；**CMEK**（\`kmsKeyName\`）為客戶自管加密。"
+    echo ""
+    PS_NT="$(jq -r 'length' "$PS_TOPICS" 2>/dev/null || echo 0)"
+    PS_NS="$(jq -r 'length' "$PS_SUBS" 2>/dev/null || echo 0)"
+    if [ "${PS_NT:-0}" -eq 0 ] && [ "${PS_NS:-0}" -eq 0 ]; then
+      echo "**本專案沒有任何 Pub/Sub topic 或 subscription**（Pub/Sub API 已啟用但未建立任何資源＝有效證據，不是資料缺口）。"
+    else
+      echo "## Topic（訊息儲存地區限制／CMEK）"
+      echo ""
+      if [ "${PS_NT:-0}" -eq 0 ]; then
+        echo "（本專案沒有任何 topic）"
+      else
+        echo "| Topic | 訊息儲存地區限制 | 傳輸強制同地區 | CMEK |"
+        echo "|---|---|---|---|"
+        jq -r '
+          .[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/") | last) as $id |
+          "| \($id) | " +
+          (((.messageStoragePolicy.allowedPersistenceRegions // []) | join(",")) | if . == "" then "未限制（可存於任何地區）" else . end) + " | " +
+          (if .messageStoragePolicy.enforceInTransit == true then "是" else "否／未設定" end) + " | " +
+          (if .kmsKeyName then "有" else "Google 管理" end) + " |"
+        ' "$PS_TOPICS"
+      fi
+      echo ""
+      echo "## Subscription（傳遞方式／push endpoint／驗證）"
+      echo ""
+      if [ "${PS_NS:-0}" -eq 0 ]; then
+        echo "（本專案沒有任何 subscription）"
+      else
+        echo "| Subscription | 綁定 Topic | 傳遞方式 | Push endpoint（對外資料流） | OIDC 驗證 | 死信 topic |"
+        echo "|---|---|---|---|---|---|"
+        jq -r '
+          .[] |
+          ((.name // "⚠️ 欄位無法解析") | split("/") | last) as $id |
+          ((.topic // "—") | if . == "—" then "—" else (split("/") | last) end) as $topic |
+          (if (.pushConfig.pushEndpoint // "") != "" then "push" elif (.bigqueryConfig != null) then "bigquery" elif (.cloudStorageConfig != null) then "cloudStorage" else "pull" end) as $mode |
+          "| \($id) | \($topic) | \($mode) | " +
+          ((.pushConfig.pushEndpoint // "—") | if . == "—" then "—" else "**" + . + "**" end) + " | " +
+          (if (.pushConfig.pushEndpoint // "") == "" then "—" elif (.pushConfig.oidcToken.serviceAccountEmail // "") != "" then ("有（" + .pushConfig.oidcToken.serviceAccountEmail + "）") else "**無（未驗證推送目標）**" end) + " | " +
+          ((.deadLetterPolicy.deadLetterTopic // "—") | if . == "—" then "—" else (split("/") | last) end) + " |"
+        ' "$PS_SUBS"
+      fi
+      echo ""
+      echo "## ⚠️ IAM 公開／匿名授權（allUsers／allAuthenticatedUsers）"
+      echo ""
+      echo "誰能 publish／subscribe。含 \`allUsers\`／\`allAuthenticatedUsers\` 者屬資料外洩／濫發風險，等同 GCS 值區公開。"
+      echo ""
+      PS_PUBHDR=0
+      # topic 與 subscription 可能同短名（get-iam-policy 輸出不含資源名、僅靠檔名識別），故「類型」欄
+      # 依 IAM policy 檔所在的來源子目錄判別（topic-iam／sub-iam），避免兩列顯示相同名稱無法辨識來源。
+      for f in "$PS_TIAM"/*.json "$PS_SIAM"/*.json; do
+        [ -f "$f" ] || continue
+        case "$f" in
+          "$PS_TIAM"/*) pstype="topic" ;;
+          "$PS_SIAM"/*) pstype="subscription" ;;
+          *)            pstype="?" ;;
+        esac
+        row="$(jq -r --arg t "$pstype" --arg f "$(basename "$f" -iam.json)" '
+          ([.bindings[]? | select((.members // []) | any(. == "allUsers" or . == "allAuthenticatedUsers")) | .role]) as $pub |
+          if ($pub | length) > 0 then "| \($t) | \($f) | " + ($pub | join(", ")) + " |" else empty end' "$f" 2>/dev/null)"
+        if [ -n "$row" ]; then
+          if [ "$PS_PUBHDR" -eq 0 ]; then
+            echo "| 類型 | 資源名 | 公開授權角色 |"
+            echo "|---|---|---|"
+            PS_PUBHDR=1
+          fi
+          echo "$row"
+        fi
+      done
+      [ "$PS_PUBHDR" -eq 0 ] && echo "無：所有 topic／subscription 的 IAM policy 皆無 allUsers／allAuthenticatedUsers 公開授權。"
+    fi
+  } > "$DIGEST/pubsub.md"
+  echo "  pubsub.md  $(wc -c < "$DIGEST/pubsub.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 topic／subscription 時 .name 不可解析不出來（gcloud 換 schema 會第一時間炸出來）。
+  # 0 資源時檔案為說明文字、不含此標記，斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/pubsub.md"; then
+    echo "    ❌ 斷言失敗：Pub/Sub topic／subscription 名（.name）解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Pub/Sub 存取控制表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  pubsub.md  略過（無 pubsub/topics.json，Pub/Sub topics list 查詢失敗或 API 未啟用）"
+fi
+
+# ── Dataflow job（worker 網路歸屬／公開 IP 暴露面／CMEK）總表 ─────────────
+# 來源：dataflow/jobs.json（jobs list 摘要：id／name／type／currentState／location）＋
+#      dataflow/job-detail/*-describe.json（jobs describe --full，含 environment.workerPools 網路組態）。
+# ⚠️⚠️ **Dataflow job 是即時快照、非期別歷史**：`dataflow jobs list` 回的是掃描當下彙整各區域的 active 與
+#      近期 job，**不是**期別內執行過的所有 job（已清除的舊 batch job 不會出現）。此表僅反映掃描當刻的狀態。
+# 安全重點（見 gcp-docs-sec.md「Dataflow worker 網路安全性與加密」）：
+#   (1) **worker 公開 IP**（environment.workerPools[].ipConfiguration）：`WORKER_IP_PRIVATE`＝無公開 IP；
+#       `WORKER_IP_PUBLIC` 或**未指定（預設）**＝worker 有公開 IP，是常見的非必要對外暴露面，對應
+#       `--no-use-public-ips`（關閉後須在子網啟用 Private Google Access 才能連 Google API）；
+#   (2) **worker 網路歸屬**（environment.workerPools[].network／subnetwork）：worker VM 跑在哪個 VPC／子網，
+#       決定其可及的內部資源；未指定 network＝跑在 default 網路；
+#   (3) **CMEK**（environment.serviceKmsKeyName）：是否用客戶自管金鑰加密 job 的狀態與暫存資料。
+# ⚠️ 空值語意：dataflow/jobs.json **不存在**＝jobs list 未執行（API 未啟用；scan.sh 已把「API 未啟用時 list
+#    仍回 [] 掩蓋真實狀態」這個坑攔在 scan.sh，改記資料缺口，故此處檔案不存在＝資料缺口，本段優雅略過）；
+#    **存在但為 []**＝API 已啟用但掃描當下無 active／近期 job（有效證據，非資料缺口）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 dataflow.googleapis.com 未啟用，describe 迴圈實跑 0 次，同 Cloud Run
+#    ／App Engine 等）；僅依官方 Dataflow v1b3 Job／Environment／WorkerPool schema 撰寫。防呆錨點：有 job 但
+#    describe 回不出 `environment`（--full 沒帶到或 schema 與假設不同）→ 網路欄印「⚠️ 欄位無法解析」讓斷言 FAIL，
+#    **絕不可默默印「未設定」**。ipConfiguration 缺席／未指定＝**預設有公開 IP**（Dataflow 預設值），非解析失敗。
+#    environment 巢狀鍵同時接 camelCase（workerPools／serviceKmsKeyName）與 snake_case（worker_pools／
+#    service_kms_key_name）——Dataflow gcloud 輸出的 snake/camel 無真實資料可證，比照 GCS 值區雙接防呆。
+DF_JOBS="$DATA/dataflow/jobs.json"
+DF_DETAIL="$DATA/dataflow/job-detail"
+if [ -f "$DF_JOBS" ]; then
+  {
+    echo "# Dataflow job worker 網路／公開 IP／CMEK 總表"
+    echo ""
+    echo "來源：\`data/dataflow/jobs.json\`（jobs list 摘要）＋ \`data/dataflow/job-detail/*-describe.json\`"
+    echo "（jobs describe --full，含 \`environment.workerPools\` worker 網路組態）。此表為上述檔案的確定性投影。"
+    echo ""
+    echo "> ⚠️ **本表是掃描當下的即時快照，非期別內的歷史 job 全集**：\`dataflow jobs list\` 只彙整掃描當刻各"
+    echo "> 區域的 active 與近期 job，已清除的舊 batch job 不會出現。判讀時務必以「當下狀態」而非「本期執行過的所有 job」理解。"
+    echo ""
+    echo "安全重點：**worker 公開 IP**（\`ipConfiguration\`；\`WORKER_IP_PRIVATE\`＝無公開 IP，其餘含未指定＝有公開 IP＝暴露面，"
+    echo "對應 \`--no-use-public-ips\`）；**worker 網路歸屬**（\`network\`／\`subnetwork\`＝worker 跑在哪個 VPC）；"
+    echo "**CMEK**（\`serviceKmsKeyName\`）。"
+    echo ""
+    DF_N="$(jq -r 'length' "$DF_JOBS" 2>/dev/null || echo 0)"
+    if [ "${DF_N:-0}" -eq 0 ]; then
+      echo "**掃描當下沒有任何 active／近期 Dataflow job**（Dataflow API 已啟用但 jobs list 回空＝有效證據，不是資料缺口）。"
+    else
+      echo "| Job ID | 名稱 | 類型 | 狀態 | 區域 | worker 網路（VPC） | worker 子網 | worker 公開 IP | worker 機型 | CMEK |"
+      echo "|---|---|---|---|---|---|---|---|---|---|"
+      # 以 jobs.json（list 摘要）為 job 全集，逐一檢查對應的 describe 檔：
+      #   describe 檔存在→用完整投影（含 environment worker 網路組態）；
+      #   describe 失敗（run() 失敗即刪 json → 檔缺席）→用 jobs.json 摘要補一列，describe-only 欄位
+      #   （worker 網路／子網／公開 IP／機型／CMEK）標「⚠️ describe 失敗＝資料缺口」，讓該 job 仍出現在表中。
+      #   worker 公開 IP 是安全訊號，job 無聲從表中消失比誇大更危險，故一律補列而非只掃 describe 檔。
+      #   （此標記非「欄位無法解析」，故不會誤觸下方 schema 斷言；describe 失敗已由 run() 記入 scan-errors.log→scan-gaps.md。）
+      while IFS=$'\t' read -r dfid dfname dftype dfstate dfloc; do
+        [ -z "$dfid" ] && continue
+        dfdescribe="$DF_DETAIL/$dfid-describe.json"
+        if [ -f "$dfdescribe" ]; then
+          jq -r '
+            (.id // "⚠️ 欄位無法解析") as $id |
+            (.name // "?") as $name |
+            ((.type // "?") | sub("JOB_TYPE_"; "")) as $type |
+            ((.currentState // .requestedState // "?") | sub("JOB_STATE_"; "")) as $state |
+            (.location // "?") as $loc |
+            (.environment // .Environment // null) as $env |
+            (($env.workerPools // $env.worker_pools) // null) as $pools |
+            (if $env == null then "⚠️ 欄位無法解析"
+             else (([$pools[]? | (.network // empty)] | first) // "default（預設網路）" | split("/") | last) end) as $net |
+            (if $env == null then "—"
+             else (([$pools[]? | (.subnetwork // empty)] | first) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
+            (([$pools[]? | (.ipConfiguration // .ip_configuration // empty)] | first) // "WORKER_IP_UNSPECIFIED") as $ipcfg |
+            (if $env == null then "⚠️ 欄位無法解析"
+             elif $ipcfg == "WORKER_IP_PRIVATE" then "私有（無公開 IP）"
+             else "**有公開 IP（暴露面）**" end) as $pubip |
+            (if $env == null then "?"
+             else (([$pools[]? | (.machineType // .machine_type // empty)] | first) // "未指定") end) as $mtype |
+            (if (($env.serviceKmsKeyName // $env.service_kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
+            "| \($id) | \($name) | \($type) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($mtype) | \($cmek) |"
+          ' "$dfdescribe"
+        else
+          # describe 失敗＝資料缺口：用 jobs.json list 摘要補列，describe-only 欄位標記缺口，避免無聲消失。
+          dftype="${dftype#JOB_TYPE_}"
+          dfstate="${dfstate#JOB_STATE_}"
+          printf '| %s | %s | %s | %s | %s | ⚠️ describe 失敗＝資料缺口 | — | ⚠️ describe 失敗＝資料缺口 | ? | ⚠️ describe 失敗＝資料缺口 |\n' \
+            "$dfid" "$dfname" "$dftype" "$dfstate" "$dfloc"
+        fi
+      done < <(jq -r '.[]? | [(.id // "?"), (.name // "?"), (.type // "?"), (.currentState // .requestedState // "?"), (.location // "?")] | @tsv' "$DF_JOBS")
+    fi
+  } > "$DIGEST/dataflow-jobs.md"
+  echo "  dataflow-jobs.md  $(wc -c < "$DIGEST/dataflow-jobs.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 job 時 describe 必須回得出 environment（--full 才有）；回不出＝路徑錯或 --full 沒帶到，
+  # 印「⚠️ 欄位無法解析」讓此斷言 FAIL（gcloud 換 schema 或漏 --full 會第一時間炸出來）。0 job 時檔案為說明文字、斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/dataflow-jobs.md"; then
+    echo "    ❌ 斷言失敗：Dataflow job 的 environment／worker 網路欄位解析不出來（gcloud 輸出 schema 與假設不同，或 describe 未帶 --full），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Dataflow worker 網路表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  dataflow-jobs.md  略過（無 dataflow/jobs.json，Dataflow API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
+# ── Dataproc cluster（worker 網路歸屬／公開 IP 暴露面／worker SA／CMEK／Kerberos）總表 ─────
+# 來源：dataproc/clusters-all.json（scan.sh 逐 active region 跑 clusters list 後合併；list 已回完整 Cluster 資源，
+#      含 config.gceClusterConfig／encryptionConfig／securityConfig，比照 Filestore 不需逐一 describe）。
+# 安全重點（見 gcp-docs-sec.md「Dataproc worker 網路安全性與加密」）：
+#   worker 公開 IP：config.gceClusterConfig.internalIpOnly。⚠️ 官方：**僅 image 2.2.x 預設 true**，其餘版本
+#     預設 false，且欄位可能缺席——故本投影**保守判定**：只有 `internalIpOnly == true` 才算「私有（無公開 IP）」，
+#     false／缺席一律標「**可能有公開 IP（暴露面）**」（偏向過度回報，絕不漏報，比照 Dataflow ipConfiguration）。
+#   worker 網路歸屬：config.gceClusterConfig.networkUri／subnetworkUri（跑在哪個 VPC／子網）。
+#   worker SA：config.gceClusterConfig.serviceAccount（過度授權風險）；CMEK：config.encryptionConfig.gcePdKmsKeyName；
+#   叢集內驗證：config.securityConfig.kerberosConfig.enableKerberos（未啟用＝叢集內無 Kerberos）。
+# ⚠️ 空值語意：dataproc/clusters-all.json **不存在**＝clusters list 未執行（API 未啟用；scan.sh 已把「API 未啟用」
+#    記成資料缺口 FAILED，見 scan-gaps.md）→ 本段優雅略過；存在但為 `[]`＝API 啟用但無叢集（有效證據）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 dataproc.googleapis.com 未啟用，list 實跑 0 次，同 Dataflow 等）；
+#    僅依官方 Dataproc v1 Cluster／GceClusterConfig schema 撰寫。防呆錨點：有 cluster 但 config.gceClusterConfig
+#    整個缺席＝路徑錯，印「⚠️ 欄位無法解析」讓斷言 FAIL，**絕不可默默印「未設定」**。camelCase／snake_case 雙接
+#    （internalIpOnly／internal_ip_only 等）——Dataproc gcloud 輸出的大小寫無真實資料可證，比照 GCS 值區雙接防呆。
+DP_SRC="$DATA/dataproc/clusters-all.json"
+if [ -f "$DP_SRC" ]; then
+  {
+    echo "# Dataproc cluster worker 網路／公開 IP／SA／CMEK／Kerberos 總表"
+    echo ""
+    echo "來源：\`data/dataproc/clusters-all.json\`（各 active region 的 \`dataproc clusters list\` 合併；list 已回完整"
+    echo "Cluster 資源，含 \`config.gceClusterConfig\`／\`encryptionConfig\`／\`securityConfig\`）。此表為其確定性投影。"
+    echo ""
+    echo "安全重點：**worker 公開 IP**（\`config.gceClusterConfig.internalIpOnly\`；**僅 image 2.2.x 預設 true**，"
+    echo "其餘版本預設 false 或欄位缺席，故本表只把 \`internalIpOnly=true\` 判為私有、其餘一律標暴露面＝保守過度回報）；"
+    echo "**worker 網路歸屬**（\`networkUri\`／\`subnetworkUri\`）；**worker 服務帳戶**（過度授權風險）；"
+    echo "**CMEK**（\`gcePdKmsKeyName\`）；**叢集內驗證**（Kerberos）。"
+    echo ""
+    DP_N="$(jq -r 'length' "$DP_SRC" 2>/dev/null || echo 0)"
+    if [ "${DP_N:-0}" -eq 0 ]; then
+      # 合併檔為 []：需區分「所有 active region 都成功查詢且皆空」（有效證據）與「部分 region 查詢失敗」（資料缺口）。
+      # scan.sh 逐 region 跑 list，run() 對失敗 region 會刪其 clusters-<region>.json，jq -s add 只合併成功／空的檔，
+      # 故「部分空、部分失敗」合併後仍為 []——不可據此宣稱全專案無叢集。對比「實際成功產出的 region 檔數」與
+      # active-regions.txt 的 region 總數（濾空行）：相等＝全數查過→維持有效證據語句；不相等＝有 region 查詢失敗→改印警語。
+      # 注意排除合併檔本身 clusters-all.json（也符合 clusters-*.json glob）。
+      DP_NREGION="$(grep -cve '^$' "$DATA/active-regions.txt" 2>/dev/null || echo 0)"
+      DP_NFILE="$(ls "$DATA/dataproc"/clusters-*.json 2>/dev/null | grep -cv '/clusters-all\.json$')"
+      if [ "${DP_NFILE:-0}" -eq "${DP_NREGION:-0}" ]; then
+        echo "**本專案沒有任何 Dataproc cluster**（Dataproc API 已啟用但各 active region 的 clusters list 皆回空＝有效證據，不是資料缺口）。"
+      else
+        echo "⚠️ **部分 region（成功 ${DP_NFILE}／共 ${DP_NREGION}）查詢失敗**，本表未涵蓋全部 region，該情形屬**資料缺口**，"
+        echo "詳見 \`scan-gaps.md\`；以下合併結果為空僅代表**成功查詢之 region** 無叢集，**不可**據此斷言全專案無 Dataproc cluster。"
+      fi
+    else
+      echo "| 叢集 | 狀態 | 區域／可用區 | worker 網路（VPC） | worker 子網 | worker 公開 IP | 主節點數 | worker 數 | worker 服務帳戶 | CMEK | Kerberos |"
+      echo "|---|---|---|---|---|---|---:|---:|---|---|---|"
+      jq -r '
+        .[] |
+        (.clusterName // "⚠️ 欄位無法解析") as $name |
+        ((.status.state // .status.State // "?")) as $state |
+        (.config // .Config // null) as $cfg |
+        (($cfg.gceClusterConfig // $cfg.gce_cluster_config) // null) as $gce |
+        ((($cfg.masterConfig // $cfg.master_config).numInstances // ($cfg.masterConfig // $cfg.master_config).num_instances) // "?") as $nmaster |
+        ((($cfg.workerConfig // $cfg.worker_config).numInstances // ($cfg.workerConfig // $cfg.worker_config).num_instances) // "?") as $nworker |
+        ((.labels."goog-dataproc-location" // $gce.zoneUri // $gce.zone_uri // "?") | split("/") | last) as $loc |
+        (if $gce == null then "⚠️ 欄位無法解析"
+         else (($gce.networkUri // $gce.network_uri) // "default（預設網路）" | split("/") | last) end) as $net |
+        (if $gce == null then "—"
+         else (($gce.subnetworkUri // $gce.subnetwork_uri) // "—" | if . == "—" then "—" else (split("/") | last) end) end) as $subnet |
+        (($gce.internalIpOnly // $gce.internal_ip_only) // null) as $iponly |
+        (if $gce == null then "⚠️ 欄位無法解析"
+         elif $iponly == true then "私有（無公開 IP）"
+         else "**可能有公開 IP（暴露面）**" end) as $pubip |
+        (if $gce == null then "?" else (($gce.serviceAccount // $gce.service_account) // "（預設 Compute SA）") end) as $sa |
+        (if (($cfg.encryptionConfig // $cfg.encryption_config).gcePdKmsKeyName // ($cfg.encryptionConfig // $cfg.encryption_config).gce_pd_kms_key_name // "") != "" then "有" else "Google 管理" end) as $cmek |
+        (if ((($cfg.securityConfig // $cfg.security_config).kerberosConfig // ($cfg.securityConfig // $cfg.security_config).kerberos_config).enableKerberos // false) == true then "啟用" else "未啟用" end) as $kerb |
+        "| \($name) | \($state) | \($loc) | \($net) | \($subnet) | \($pubip) | \($nmaster) | \($nworker) | \($sa) | \($cmek) | \($kerb) |"
+      ' "$DP_SRC"
+    fi
+  } > "$DIGEST/dataproc-clusters.md"
+  echo "  dataproc-clusters.md  $(wc -c < "$DIGEST/dataproc-clusters.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 cluster 時 config.gceClusterConfig 必須解析得出；解析不出＝路徑錯或大小寫不符，
+  # 印「⚠️ 欄位無法解析」讓斷言 FAIL。0 cluster 時檔案為說明文字、斷言自然通過。
+  if grep -q '欄位無法解析' "$DIGEST/dataproc-clusters.md"; then
+    echo "    ❌ 斷言失敗：Dataproc cluster 的 config.gceClusterConfig／worker 網路欄位解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Dataproc worker 網路表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  dataproc-clusters.md  略過（無 dataproc/clusters-all.json，Dataproc API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
+# ── Vertex AI Endpoint（對外暴露／VPC 歸屬／CMEK）總表 ───────────────────
+# 來源：vertex/endpoints-all.json（scan.sh 逐 active region 跑 `ai endpoints list` 後合併；list 已回完整 Endpoint
+#      資源，含 network／privateServiceConnectConfig／encryptionSpec，比照 Dataproc 不需逐一 describe）。
+# 安全重點（見 gcp-docs-sec.md「Vertex AI Endpoint 對外暴露與加密」）——聚焦**單一核心面：端點對外暴露**：
+#   公開端點判定：`network`（VPC peering／Private Service Access）與 `privateServiceConnectConfig`（PSC）**互斥**，
+#     **兩者皆無＝公開端點（暴露面）**——有公開 REST/gRPC 端點，網際網路可及。本投影**保守判定**：只有明確走
+#     network（VPC peering）或 PSC（enablePrivateServiceConnect=true）才算私有，其餘一律標「**公開端點（暴露面）**」
+#     （偏向過度回報，絕不漏報，比照 Dataproc internalIpOnly／Dataflow ipConfiguration）。
+#   VPC 歸屬：`network`（走 VPC peering 時綁定的 VPC 完整路徑）；CMEK：`encryptionSpec.kmsKeyName`。
+# ⚠️ 空值語意：vertex/endpoints-all.json **不存在**＝endpoints list 未執行（API 未啟用；scan.sh 已把「API 未啟用」
+#    記成資料缺口 FAILED，見 scan-gaps.md）→ 本段優雅略過；存在但為 `[]`＝API 啟用但無 endpoint（有效證據）。
+# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 aiplatform.googleapis.com 未啟用，list 實跑 0 次，同 Dataproc 等）；
+#    僅依官方 Vertex AI v1 projects.locations.endpoints schema 撰寫。防呆錨點：有 endpoint 但 `.name` 解析不出來
+#    ＝路徑錯，印「⚠️ 欄位無法解析」讓斷言 FAIL，**絕不可默默印「未設定」**。camelCase／snake_case 雙接
+#    （privateServiceConnectConfig／private_service_connect_config、encryptionSpec／encryption_spec 等）——
+#    Vertex gcloud 輸出的大小寫無真實資料可證，比照 GCS 值區雙接防呆。
+VX_SRC="$DATA/vertex/endpoints-all.json"
+if [ -f "$VX_SRC" ]; then
+  {
+    echo "# Vertex AI Endpoint 對外暴露／VPC 歸屬／CMEK 總表"
+    echo ""
+    echo "來源：\`data/vertex/endpoints-all.json\`（各 active region 的 \`gcloud ai endpoints list\` 合併；list 已回完整"
+    echo "Endpoint 資源，含 \`network\`／\`privateServiceConnectConfig\`／\`encryptionSpec\`）。此表為其確定性投影。"
+    echo ""
+    echo "安全重點：**端點對外暴露**——\`network\`（VPC peering）與 \`privateServiceConnectConfig\`（PSC）**互斥**，"
+    echo "**兩者皆無＝公開端點**（有公開 REST/gRPC 端點＝資料與模型外洩面）。本表保守判定：僅明確走 VPC peering 或"
+    echo "PSC 才算私有，其餘一律標暴露面。另看 **VPC 歸屬**（\`network\`）與 **CMEK**（\`encryptionSpec.kmsKeyName\`）。"
+    echo ""
+    VX_N="$(jq -r 'length' "$VX_SRC" 2>/dev/null || echo 0)"
+    if [ "${VX_N:-0}" -eq 0 ]; then
+      # 合併檔為 []：同 Dataproc，需區分「所有 active region 都成功查詢且皆空」（有效證據）與「部分 region 查詢失敗」
+      # （資料缺口）。scan.sh 逐 region 跑 list，run() 對失敗 region 會刪其 endpoints-<region>.json，合併後「部分空、
+      # 部分失敗」仍為 []。對比成功產出的 region 檔數與 active-regions.txt region 總數（濾空行、排除合併檔 endpoints-all.json）。
+      VX_NREGION="$(grep -cve '^$' "$DATA/active-regions.txt" 2>/dev/null || echo 0)"
+      VX_NFILE="$(ls "$DATA/vertex"/endpoints-*.json 2>/dev/null | grep -cv '/endpoints-all\.json$')"
+      if [ "${VX_NFILE:-0}" -eq "${VX_NREGION:-0}" ]; then
+        echo "**本專案沒有任何 Vertex AI Endpoint**（Vertex AI API 已啟用但各 active region 的 endpoints list 皆回空＝有效證據，不是資料缺口）。"
+      else
+        echo "⚠️ **部分 region（成功 ${VX_NFILE}／共 ${VX_NREGION}）查詢失敗**，本表未涵蓋全部 region，該情形屬**資料缺口**，"
+        echo "詳見 \`scan-gaps.md\`；以下合併結果為空僅代表**成功查詢之 region** 無 endpoint，**不可**據此斷言全專案無 Vertex AI Endpoint。"
+      fi
+    else
+      echo "| Endpoint ID | 顯示名稱 | 區域 | 對外暴露 | VPC 歸屬（peering） | PSC | CMEK |"
+      echo "|---|---|---|---|---|---|---|"
+      jq -r '
+        .[] |
+        (.name // "⚠️ 欄位無法解析") as $rawname |
+        (if $rawname == "⚠️ 欄位無法解析" then "⚠️ 欄位無法解析" else ($rawname | split("/") | last) end) as $id |
+        (if $rawname == "⚠️ 欄位無法解析" then "?" else (($rawname | split("/"))[3] // "?") end) as $region |
+        ((.displayName // .display_name) // "—") as $disp |
+        ((.network // "")) as $net |
+        ((.privateServiceConnectConfig // .private_service_connect_config) // null) as $psc |
+        (($psc.enablePrivateServiceConnect // $psc.enable_private_service_connect) // false) as $pscEnabled |
+        (if ($net != "") then "私有（VPC peering）"
+         elif ($pscEnabled == true) then "私有（PSC）"
+         else "**公開端點（暴露面）**" end) as $exposure |
+        (if ($net != "") then ($net | split("/") | last) else "—" end) as $vpc |
+        (if ($pscEnabled == true) then "啟用" else "否" end) as $pscCol |
+        ((.encryptionSpec // .encryption_spec) // null) as $enc |
+        (if (($enc.kmsKeyName // $enc.kms_key_name) // "") != "" then "有" else "Google 管理" end) as $cmek |
+        "| \($id) | \($disp) | \($region) | \($exposure) | \($vpc) | \($pscCol) | \($cmek) |"
+      ' "$VX_SRC"
+    fi
+  } > "$DIGEST/vertex-endpoints.md"
+  echo "  vertex-endpoints.md  $(wc -c < "$DIGEST/vertex-endpoints.md") 位元組"
+  MADE=$((MADE + 1))
+  # 欄位解析斷言：有 endpoint 時 `.name` 必須解析得出；解析不出＝路徑錯或大小寫不符，印「⚠️ 欄位無法解析」
+  # 讓斷言 FAIL。0 endpoint 時檔案為說明文字、斷言自然通過。（公開端點的「**公開端點（暴露面）**」不含此字串。）
+  if grep -q '欄位無法解析' "$DIGEST/vertex-endpoints.md"; then
+    echo "    ❌ 斷言失敗：Vertex AI Endpoint 的 .name／網路欄位解析不出來（gcloud 輸出 schema 與假設不同），請修正 digest.sh 投影" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "    ✅ Vertex AI Endpoint 對外暴露表產生成功（未出現「欄位無法解析」）"
+  fi
+else
+  echo "  vertex-endpoints.md  略過（無 vertex/endpoints-all.json，Vertex AI API 未啟用＝資料缺口，見 scan-gaps.md）"
+fi
+
 # ── IAM 政策：把 bindings 攤成「角色 → 成員」並標出基本角色與外部成員 ──
 # 必留證據：基本角色（owner/editor/viewer）的授予對象——這是 GCP 最常見的過度授權；
 #           allUsers／allAuthenticatedUsers（公開授權）；跨網域成員。
@@ -729,7 +1286,7 @@ if python3 "$SKILL_DIR/scripts/network-facts.py"; then
   MADE=$((MADE + 1))
   NF="$DIGEST/network-facts.md"
   # 斷言：三個關聯區塊都要在（少任何一段代表關聯沒算出來，等於又把判斷丟回給 LLM）
-  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性" "無伺服器資源的網路路徑"; do
+  for sec in "防火牆規則的實際暴露面" "VM 的實際對外路徑" "Cloud SQL 的實際可及性" "無伺服器資源的網路路徑" "AlloyDB 的實際可及性"; do
     if grep -q "$sec" "$NF"; then
       echo "    ✅ 網路事實：${sec}"
     else
