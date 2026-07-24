@@ -133,6 +133,11 @@ fi
 #      snake/camel 教訓）。沿用同一套防呆：抓不到 ingress／name 就印「⚠️ 欄位無法解析」並讓斷言
 #      FAIL，**絕不可默默印「未設定」**——寧可斷言失敗逼人發現路徑錯了。ingress／vpcAccess
 #      用雙路 fallback：v2（頂層 .ingress、.template.vpcAccess）與 v1 Knative（annotations）都試。
+# ⚠️ networkInterfaces（Direct VPC egress）也必須雙路（2026-07 實測教訓）：先前只讀 v2 的
+#    `.template.vpcAccess.networkInterfaces`，漏了 v1 Knative annotation `run.googleapis.com/network-interfaces`
+#    （JSON 字串，需 fromjson）——導致「Sending traffic directly to the VPC」的服務被誤畫成「不屬於任何 VPC」。
+#    connector／egress 早有 v1 fallback，networkInterfaces 當時漏補，本次補上（兩種形狀皆已用合成資料驗證）。
+#    annotation key 依官方文件與 Console 佐證；若日後某專案 v1 raw JSON 的 key 不同，會回退成空→仍需核對。
 # ⚠️ ingress **必須正規化成單一 v2 詞彙**：v1 Knative annotation 的值是小寫短詞
 #    （"all"／"internal"／"internal-and-cloud-load-balancing"），但下游 network-facts.py 與
 #    build-diagram.js 只認 v2 enum（INGRESS_TRAFFIC_ALL 等）。不正規化的話，v1 風格、對外開放
@@ -162,7 +167,12 @@ if [ -d "$RUN_DETAIL" ] && ls "$RUN_DETAIL"/*-describe.json > /dev/null 2>&1; th
       egress: (.template.vpcAccess.egress
                // .spec.template.metadata.annotations["run.googleapis.com/vpc-access-egress"]
                // null),
-      networkInterfaces: (.template.vpcAccess.networkInterfaces // [])
+      networkInterfaces: (.template.vpcAccess.networkInterfaces
+                          // ((.spec.template.metadata.annotations["run.googleapis.com/network-interfaces"]
+                                // .metadata.annotations["run.googleapis.com/network-interfaces"]) as $ni
+                             | if ($ni | type) == "string" then (try ($ni | fromjson) catch [])
+                               elif ($ni | type) == "array" then $ni
+                               else [] end))
     }
   }]' "$RUN_DETAIL"/*-describe.json > "$DIGEST/run-services.json"
   RN="$(ls "$RUN_DETAIL"/*-describe.json | wc -l | tr -d ' ')"

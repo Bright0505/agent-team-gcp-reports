@@ -51,7 +51,10 @@ function parseArgs(argv) {
   const opts = { out: 'report/gcp-architecture.drawio' };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith('--') && a.slice(2) in opts) {
+    if (a === '--annotated') {
+      // 布林旗標：純現況（預設）vs 詳註版（含 ⚠ 評語與 GCP 網路模型解說）。實際由 ANNOTATED（process.argv）讀取，此處僅放行不報錯。
+      continue;
+    } else if (a.startsWith('--') && a.slice(2) in opts) {
       const v = argv[++i];
       if (v === undefined) fail(`${a} 缺少值`);
       opts[a.slice(2)] = v;
@@ -936,10 +939,18 @@ function gridSize(count, perLine, tileW, tileH) {
   return { cols, lines, w: cols * tileW, h: lines * tileH };
 }
 
+// ---------- 純現況 vs 詳註 ----------
+// 預設（PLAIN）：只畫純拓撲與組態（名稱／IP／機型／CIDR／版本／規則清單／連線），
+// 不輸出 ⚠ 評語旗標與教學式解說敘述——供「實際狀態架構圖」用途。
+// --annotated：回到含稽核註記（⚠ 暴露／公開 IP／未備份／未掛 Armor…）與 GCP 網路模型解說的詳註版。
+// 兩者的顏色視覺（紅/藍通道、防火牆框）一致；差別只在「要不要寫評語與解說文字」。
+const ANNOTATED = process.argv.includes('--annotated');
+const A = (s) => (ANNOTATED ? s : ''); // 評語/解說片段：僅詳註版輸出
+
 // ---------- 標籤組裝（把「證據」寫進標籤，圖示 shape 失效時仍看得懂）----------
 function vmLabel(vm) {
   const ext = vm.externalIPs.length ? `<br><font color="${GCP.red}">外部 IP ${vm.externalIPs[0]}</font>` : '<br>僅內部 IP';
-  const warn = vm.exposed ? `<br><font color="${GCP.red}">⚠ 對 0.0.0.0/0 開放 ${vm.worldPorts.join(' ')}</font>` : '';
+  const warn = vm.exposed ? A(`<br><font color="${GCP.red}">⚠ 對 0.0.0.0/0 開放 ${vm.worldPorts.join(' ')}</font>`) : '';
   const stop = vm.status !== 'RUNNING' ? `<br><font color="${GCP.faint}">${vm.status}</font>` : '';
   return `${vm.name}<br>${vm.machineType}　${vm.zone}${ext}${warn}${stop}`;
 }
@@ -949,14 +960,15 @@ function sqlLabel(db) {
   if (db.isReplica) parts.push(`唯讀複本（主：${db.master}）`);
   if (db.privateIP) parts.push(`私有 IP ${db.privateIP}`);
   if (db.publicIP) {
-    parts.push(
-      db.openToWorld
-        ? `<font color="${GCP.red}">⚠ 公開 IP ${db.publicIP} ＋ 授權 0.0.0.0/0</font>`
-        : `<font color="${GCP.red}">⚠ 公開 IP ${db.publicIP}（授權 ${db.authNets.length} 個網段）</font>`
-    );
+    // 公開 IP 是現況事實（暴露點），純現況版保留，僅去掉 ⚠ 評語；詳註版維持 ⚠。
+    parts.push(ANNOTATED
+      ? (db.openToWorld
+          ? `<font color="${GCP.red}">⚠ 公開 IP ${db.publicIP} ＋ 授權 0.0.0.0/0</font>`
+          : `<font color="${GCP.red}">⚠ 公開 IP ${db.publicIP}（授權 ${db.authNets.length} 個網段）</font>`)
+      : `<font color="${GCP.red}">公開 IP ${db.publicIP}（授權 ${db.authNets.length} 網段${db.openToWorld ? '，含 0.0.0.0/0' : ''}）</font>`);
   }
-  if (!db.sslEnforced) parts.push(`<font color="${GCP.yellow}">⚠ SSL ${db.sslMode}</font>`);
-  if (!db.backup) parts.push(`<font color="${GCP.red}">⚠ 未啟用自動備份</font>`);
+  if (ANNOTATED && !db.sslEnforced) parts.push(`<font color="${GCP.yellow}">⚠ SSL ${db.sslMode}</font>`);
+  if (ANNOTATED && !db.backup) parts.push(`<font color="${GCP.red}">⚠ 未啟用自動備份</font>`);
   return parts.join('<br>');
 }
 
@@ -967,7 +979,7 @@ function subnetLabel(s) {
   flags.push(s.nat ? `NAT ${s.nat}` : 'NAT 無');
   const purpose = s.purpose && s.purpose !== 'PRIVATE' ? `<br>${s.purpose}` : '';
   const gaps = subnetGaps(s);
-  const warn = gaps.length ? `<br><font color="${GCP.yellow}">⚠ 僅內部 IP 的 VM ${gaps.join('、')}</font>` : '';
+  const warn = gaps.length ? A(`<br><font color="${GCP.yellow}">⚠ 僅內部 IP 的 VM ${gaps.join('、')}</font>`) : '';
   return `${s.name}<br>${s.cidr}<br>${s.region}${purpose}<br><font color="${GCP.grey}">${flags.join('・')}</font>${warn}`;
 }
 
@@ -980,8 +992,7 @@ function subnetLabel(s) {
 //                   否則流量鏈看起來接上了、實際上後端是誰仍然未知，比斷掉更誤導。
 function groupLabel(g) {
   if (g.unresolved) {
-    return `${g.name}<br><font color="${GCP.yellow}">⚠ 未掃描到此群組</font>` +
-      `<br><font color="${GCP.grey}">僅由後端服務指名<br>組態不明</font>`;
+    return `${g.name}<br><font color="${GCP.grey}">未掃描到此群組（僅由後端服務指名，組態不明）</font>`;
   }
   const kind = g.unmanaged ? '<br>未受管群組' : '';
   const size = g.unmanaged ? `<br>執行個體 ${g.size}` : `<br>執行個體 ${g.size}/${g.targetSize}`;
@@ -1025,7 +1036,7 @@ function buildSummary(model, sd) {
       'sum-dns',
       '1',
       `Cloud DNS（${zones.length}）<br>${zones.map((z) => `${z.name}：${z.dnsName}`).join('<br>')}` +
-        `<br><font color="${GCP.faint}">未掃描 record set，對應到哪個<br>負載平衡器無法證明，故不畫線</font>`,
+        A(`<br><font color="${GCP.faint}">未掃描 record set，對應到哪個<br>負載平衡器無法證明，故不畫線</font>`),
       STYLES.dns,
       extX + (S.extW - S.icon) / 2,
       ey,
@@ -1043,7 +1054,7 @@ function buildSummary(model, sd) {
     const armorTxt = bs
       ? bs.securityPolicy
         ? `<br>Cloud Armor：${bs.securityPolicy}`
-        : `<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`
+        : `${A(`<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`)}`
       : '';
     pg.vertex(
       `sum-fr-${f.name}`,
@@ -1134,8 +1145,8 @@ function buildSummary(model, sd) {
   pg.vertex('sum-side-gcs', cloud, `Cloud Storage（${model.buckets.length}，不屬於任何 VPC）`, STYLES.sideTitle, sideX, sy, S.sidebarW, 20);
   sy += 26;
   model.buckets.forEach((b, i) => {
-    const paps = b.pap === 'enforced' ? 'PAP enforced' : `<font color="${GCP.yellow}">⚠ PAP ${b.pap}</font>`;
-    const ublas = b.ubla ? 'UBLA 開' : `<font color="${GCP.yellow}">⚠ UBLA 關</font>`;
+    const paps = b.pap === 'enforced' ? 'PAP enforced' : (ANNOTATED ? `<font color="${GCP.yellow}">⚠ PAP ${b.pap}</font>` : `PAP ${b.pap}`);
+    const ublas = b.ubla ? 'UBLA 開' : (ANNOTATED ? `<font color="${GCP.yellow}">⚠ UBLA 關</font>` : 'UBLA 關');
     pg.vertex(
       `sum-gcs-${b.name}`,
       cloud,
@@ -1176,7 +1187,7 @@ function buildSummary(model, sd) {
       }
       const ing =
         s.ingress === 'INGRESS_TRAFFIC_ALL'
-          ? `<br><font color="${GCP.red}">⚠ Ingress ALL（對外開放）</font>`
+          ? (ANNOTATED ? `<br><font color="${GCP.red}">⚠ Ingress ALL（對外開放）</font>` : `<br>Ingress ALL`)
           : s.ingress
           ? `<br>Ingress ${String(s.ingress).replace('INGRESS_TRAFFIC_', '')}`
           : '';
@@ -1199,7 +1210,9 @@ function buildSummary(model, sd) {
     pg.vertex(
       'sum-gaps',
       cloud,
-      `⚠ 資料缺口（掃描查詢失敗，非「未設定」）<br>${GAPS.map((x) => `・${x}`).join('<br>')}`,
+      ANNOTATED
+        ? `⚠ 資料缺口（掃描查詢失敗，非「未設定」）<br>${GAPS.map((x) => `・${x}`).join('<br>')}`
+        : `資料缺口（未掃到）<br>${GAPS.map((x) => `・${x.replace(/（.*）\s*$/, '')}`).join('<br>')}`,
       STYLES.note,
       sideX,
       sy,
@@ -1342,7 +1355,7 @@ function planVpc(model, v) {
 
 function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
   const S = SUM;
-  const modeWarn = v.auto ? `　<font color="${GCP.yellow}">⚠ 自動模式：每個 GCP 區域自動建一個子網</font>` : '';
+  const modeWarn = v.auto ? A(`　<font color="${GCP.yellow}">⚠ 自動模式：每個 GCP 區域自動建一個子網</font>`) : '';
   const frame = pg.vertex(
     `sum-vpc-${v.name}`,
     parent,
@@ -1378,7 +1391,9 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
     pg.vertex(
       `sum-nonat-${v.name}`,
       frame,
-      '此網路沒有 Cloud Router／Cloud NAT：無外部 IP 的 VM 沒有對外連出的路徑（掃描回空＝有效證據）',
+      ANNOTATED
+        ? '此網路沒有 Cloud Router／Cloud NAT：無外部 IP 的 VM 沒有對外連出的路徑（掃描回空＝有效證據）'
+        : '無 Cloud Router／Cloud NAT',
       STYLES.label,
       extX + 10,
       56,
@@ -1394,9 +1409,11 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
   pg.vertex(
     `sum-subblock-${v.name}`,
     frame,
-    '子網（區域資源）　GCP 沒有公有／私有子網之分：子網不分層，下方通道分的是「資源有沒有外部 IP」<br>' +
-      `<font color="${GCP.grey}">PGA＝Private Google Access（到 Google API）；Cloud NAT（連出網際網路）。` +
-      `兩者管不同的事、<b>不可互相替代</b>——有 NAT 也救不了 PGA 關閉</font>`,
+    ANNOTATED
+      ? '子網（區域資源）　GCP 沒有公有／私有子網之分：子網不分層，下方通道分的是「資源有沒有外部 IP」<br>' +
+          `<font color="${GCP.grey}">PGA＝Private Google Access（到 Google API）；Cloud NAT（連出網際網路）。` +
+          `兩者管不同的事、<b>不可互相替代</b>——有 NAT 也救不了 PGA 關閉</font>`
+      : '子網（區域資源）',
     STYLES.subnetBlock,
     extX,
     subY,
@@ -1428,7 +1445,9 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
     pg.vertex(
       `sum-subhidden-${v.name}`,
       frame,
-      `另有 ${v.hiddenSubnets.length} 個自動建立的子網分布在 ${uniq(v.hiddenSubnets.map((s) => s.region)).length} 個沒有任何資源的區域，未逐一繪出（明細見 data/network/subnets.json）`,
+      ANNOTATED
+        ? `另有 ${v.hiddenSubnets.length} 個自動建立的子網分布在 ${uniq(v.hiddenSubnets.map((s) => s.region)).length} 個沒有任何資源的區域，未逐一繪出（明細見 data/network/subnets.json）`
+        : `另有 ${v.hiddenSubnets.length} 個自動子網未繪出`,
       STYLES.subTileMuted,
       extX + S.subPad,
       subY + plan.subBlockH - 30,
@@ -1443,7 +1462,9 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
   pg.vertex(
     `sum-ch-ext-${v.name}`,
     frame,
-    '有外部 IP：直接可及於網際網路<br><font color="#B31412">實際暴露 ＝ 有外部 IP ＋ 套用到來源 0.0.0.0/0 的 allow 規則</font>',
+    ANNOTATED
+      ? '有外部 IP<br><font color="#B31412">實際暴露 ＝ 有外部 IP ＋ 套用到來源 0.0.0.0/0 的 allow 規則<br>（只有外部 IP、無 0.0.0.0/0 規則 ≠ 對全網開放，仍受防火牆規則約束）</font>'
+      : '有外部 IP',
     STYLES.chExternal,
     extX,
     chY,
@@ -1453,7 +1474,9 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
   pg.vertex(
     `sum-ch-int-${v.name}`,
     frame,
-    '僅內部 IP：需經負載平衡器／Cloud NAT／IAP 才到得了<br><font color="#174EA6">對外連出取決於 Cloud NAT，不是子網屬性</font>',
+    ANNOTATED
+      ? '僅內部 IP：需經負載平衡器／Cloud NAT／IAP 才到得了<br><font color="#174EA6">對外連出取決於 Cloud NAT，不是子網屬性</font>'
+      : '僅內部 IP',
     STYLES.chInternal,
     intX,
     chY,
@@ -1504,9 +1527,9 @@ function drawVpcBlock(pg, parent, model, v, plan, x, y, w, sd) {
     const fwH = row.h - S.rowPadTop - 8;
     if (rowVms.length) {
       const label = applied.length
-        ? worldRules.length
-          ? `VPC 防火牆（實際套用）：${applied.join('、')}　⚠ 其中 ${worldRules.join('、')} 來源 0.0.0.0/0 → ${worldPorts.join(' ')}`
-          : `VPC 防火牆（實際套用）：${applied.join('、')}`
+        ? (ANNOTATED && worldRules.length
+            ? `VPC 防火牆（實際套用）：${applied.join('、')}　⚠ 其中 ${worldRules.join('、')} 來源 0.0.0.0/0 → ${worldPorts.join(' ')}`
+            : `VPC 防火牆（實際套用）：${applied.join('、')}`)
         : 'VPC 防火牆：沒有任何 INGRESS allow 規則套用到這些 VM';
       pg.vertex(
         `sum-fw-${v.name}-${row.key}`,
@@ -1567,7 +1590,7 @@ function drawSummaryItem(pg, frame, row, item, ix, iy, sd) {
     const armor = item.securityPolicy
       ? `<br>Armor ${item.securityPolicy}`
       : /^EXTERNAL/.test(item.scheme)
-        ? `<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`
+        ? `${A(`<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`)}`
         : '';
     pg.vertex(
       `sum-bs-${item.name}`,
@@ -1584,7 +1607,7 @@ function drawSummaryItem(pg, frame, row, item, ix, iy, sd) {
     return;
   }
   if (row.kind === 'gke') {
-    const priv = item.privateNodes ? '私有節點' : `<font color="${GCP.yellow}">⚠ 節點非私有</font>`;
+    const priv = item.privateNodes ? '私有節點' : (ANNOTATED ? `<font color="${GCP.yellow}">⚠ 節點非私有</font>` : '節點非私有');
     const id = pg.vertex(
       `sum-gke-${item.name}`,
       frame,
@@ -1668,7 +1691,7 @@ function buildOverview(model, drawn) {
       `ov-fr-${f.name}`,
       cloud,
       `${f.name}<br>${f.ip}　${f.protocol}:${f.ports.join(',')}` +
-        (bs && !bs.securityPolicy ? `<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>` : ''),
+        (bs && !bs.securityPolicy ? `${A(`<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`)}` : ''),
       STYLES.lb,
       frColX,
       60 + i * slotH,
@@ -1700,7 +1723,7 @@ function buildOverview(model, drawn) {
       cloud,
       `<b>${v.name}</b>（${v.mode} 模式）<br>${v.regions.length} 個區域<br>${parts.join('　')}` +
         `<br>有外部 IP 的 VM：${extN}／${v.vms.length}` +
-        (exposedN ? `　<font color="${GCP.red}">⚠ 實際暴露 ${exposedN}</font>` : '') +
+        (exposedN ? A(`　<font color="${GCP.red}">⚠ 實際暴露 ${exposedN}</font>`) : '') +
         (v.hasWorkload ? '<br>→ 詳見同名分頁' : '<br>（無工作負載）'),
       STYLES.vpcMini,
       vpcColX,
@@ -1768,7 +1791,7 @@ function buildVpcPage(model, v, drawn) {
   addBand({ key: 'bs', title: '後端服務', color: GCP.blue, items: vpcBss });
   addBand({ key: 'gke', title: 'GKE 叢集', color: GCP.green, items: v.gkes });
   addBand({ key: 'mig', title: '執行個體群組（受管 MIG／未受管／未掃描到）', color: GCP.grey, items: v.groups });
-  addBand({ key: 'vm', title: 'Compute Engine VM（⚠＝有外部 IP 且被 0.0.0.0/0 的 allow 規則套用）', color: GCP.grey, items: v.vms });
+  addBand({ key: 'vm', title: ANNOTATED ? 'Compute Engine VM（⚠＝有外部 IP 且被 0.0.0.0/0 的 allow 規則套用）' : 'Compute Engine VM', color: GCP.grey, items: v.vms });
   addBand({ key: 'sql', title: 'Cloud SQL', color: GCP.yellow, items: v.sqls });
   addBand({ key: 'intfr', title: '內部轉送規則／Private Service Connect 端點', color: GCP.blue, items: v.frs.filter((f) => !f.external) });
 
@@ -1887,7 +1910,7 @@ function buildVpcPage(model, v, drawn) {
   pg.vertex(
     `${v.name}-grid-label`,
     frame,
-    '子網（區域資源；GCP 沒有公有／私有子網之分。⚠＝PGA 或 Cloud NAT 缺一，僅內部 IP 的 VM 會少一條對外路徑）',
+    ANNOTATED ? '子網（區域資源；GCP 沒有公有／私有子網之分。⚠＝PGA 或 Cloud NAT 缺一，僅內部 IP 的 VM 會少一條對外路徑）' : '子網（區域資源）',
     STYLES.label,
     M,
     y,
@@ -1960,7 +1983,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
         bandCell,
         `${item.name}<br>${item.kind}${item.certs.length ? `<br>憑證 ${item.certs.length}` : ''}` +
           `${item.urlMap ? `<br>URL 對應 ${item.urlMap}` : ''}` +
-          `${item.kind === 'HTTPS' && !item.sslPolicy ? `<br><font color="${GCP.yellow}">⚠ 未指定 SSL 政策</font>` : ''}`,
+          `${item.kind === 'HTTPS' && !item.sslPolicy ? A(`<br><font color="${GCP.yellow}">⚠ 未指定 SSL 政策</font>`) : ''}`,
         STYLES.lb,
         ix,
         iy,
@@ -1974,7 +1997,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
       const armor = item.securityPolicy
         ? `<br>Armor ${item.securityPolicy}`
         : /^EXTERNAL/.test(item.scheme)
-          ? `<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`
+          ? `${A(`<br><font color="${GCP.red}">⚠ 未掛 Cloud Armor</font>`)}`
           : '';
       const id = pg.vertex(
         `bs-${item.name}`,
@@ -1982,7 +2005,7 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
         `${item.name}<br>${item.scheme}　${item.protocol}${item.port ? `:${item.port}` : ''}` +
           `<br>健康檢查 ${item.healthChecks.join('、') || '無'}` +
           `${item.cdn ? '<br>Cloud CDN 開' : ''}${item.iap ? '<br>IAP 開' : ''}` +
-          `${item.logging ? '' : `<br><font color="${GCP.yellow}">⚠ 存取記錄未開</font>`}${armor}`,
+          `${item.logging ? '' : A(`<br><font color="${GCP.yellow}">⚠ 存取記錄未開</font>`)}${armor}`,
         STYLES.lb,
         ix,
         iy,
@@ -1998,12 +2021,12 @@ function drawVpcPageItem(pg, bandCell, band, item, ix, iy, drawn, put) {
         `gke-${item.name}`,
         bandCell,
         `${item.name}<br>${item.mode}　${item.location}<br>節點 ${item.nodeCount}<br>${item.version}` +
-          `${item.privateNodes ? '<br>私有節點' : `<br><font color="${GCP.yellow}">⚠ 節點非私有</font>`}` +
+          `${item.privateNodes ? '<br>私有節點' : (ANNOTATED ? `<br><font color="${GCP.yellow}">⚠ 節點非私有</font>` : '<br>節點非私有')}` +
           `${item.privateEndpoint ? '<br>私有控制平面端點' : ''}` +
           `${
             item.authorizedNetworks.length
               ? `<br>主控授權網段 ${item.authorizedNetworks.length}`
-              : `<br><font color="${GCP.yellow}">⚠ 無主控授權網段</font>`
+              : (ANNOTATED ? `<br><font color="${GCP.yellow}">⚠ 無主控授權網段</font>` : '<br>無主控授權網段')
           }`,
         STYLES.gke,
         ix,
