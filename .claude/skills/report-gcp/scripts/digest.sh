@@ -1299,9 +1299,9 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# 覆蓋率檢查：以 Cloud Asset Inventory diff scan.sh 已知覆蓋清單，確定性標出「有資源卻沒掃」的缺口。
-# 無 asset-inventory.json（cloudasset API 未啟用／無權限）時，coverage-check.sh 自身會把它記為資料缺口並 exit 0，
-# 故此處不因缺 CAI 而讓 digest 失敗；但腳本本身執行失敗（語法／jq 錯）仍計入 FAIL。
+# 覆蓋率檢查（純諮詢）：以 Cloud Asset Inventory diff scan-manifest.json 宣告的覆蓋，標出「有資源卻沒掃」的缺口。
+# coverage-check.sh 只報告、不阻斷（不 exit 1）；無 asset-inventory.json（cloudasset API 未啟用／無權限）時
+# 自身記為資料缺口並 exit 0。故此處不因缺 CAI 或有缺口而讓 digest 失敗；只有腳本本身執行失敗（語法／jq 錯）才計入 FAIL。
 if bash "$SKILL_DIR/scripts/coverage-check.sh" "$DATA"; then
   MADE=$((MADE + 1))
   CG="$DIGEST/coverage-gaps.md"

@@ -107,12 +107,21 @@ echo "專案: ${PROJECT}（編號 ${PROJECT_NUMBER}）/ 身分: $ACTIVE_ACCOUNT"
 # 注意：gcloud list 對「沒有資源」回的是 `[]`（2 位元組）而非空字串，因此空判斷要看 JSON 內容。
 run() {
   local out="$1"; shift
+  # 由 manifest 引擎在呼叫前設定 RUN_API（宣告本次掃描依賴的 API）；一般呼叫者不設，故為空。
+  # 讀出後立即清空，避免殘留洩漏到下一次呼叫（尤其例外區塊的 run() 呼叫不該被預檢影響）。
+  local api="${RUN_API:-}"; RUN_API=""
   local dir; dir="$(dirname "$DATA/$out")"; mkdir -p "$dir"
   local errtmp; errtmp="$(mktemp)"
   if gcloud "$@" --format=json > "$DATA/$out.json" 2>"$errtmp"; then
     if [ -s "$DATA/$out.json" ] && ! jq -e 'if type=="array" then length==0 elif type=="object" then length==0 else false end' \
          "$DATA/$out.json" > /dev/null 2>&1; then
       echo "  ok    $out"
+    elif [ -n "$api" ] && ! api_enabled "$api"; then
+      # 回空、但宣告的 API 未啟用＝資料缺口（防 Dataflow 型「未啟用仍回 []」被誤判成「未設定」的相反結論）。
+      # 通用預檢：讓 manifest 服務不必逐一測過「關閉時行為」也安全（見 scan-manifest.json 的設計說明）。
+      echo "  fail  $out ($api 未啟用，list 回空係掩蓋，記資料缺口)"
+      echo "FAILED: $out :: reason=$api is disabled / has not been used (SERVICE_DISABLED); list returned empty so recorded as data gap not unset :: gcloud $*" >> "$ERRLOG"
+      rm -f "$DATA/$out.json"
     else
       echo "  empty $out (回空結果＝該項未設定／無此類資源)"
       echo "EMPTY: $out :: gcloud $*" >> "$ERRLOG"
@@ -153,6 +162,52 @@ fi
 
 P=(--project "$PROJECT")
 
+# ── manifest 引擎 ─────────────────────────────────────────────────────
+# 標準服務的掃描清單抽到 references/scan-manifest.json（進版控、受審）。引擎逐 section 執行清單中
+# 帶 args 的條目（handledIn 者由下方 scan.sh 程式碼負責，引擎跳過）。args 不含 --project，引擎附加。
+# 縱深防禦：動詞限唯讀白名單、依 api 做啟用預檢（見 run()）——可執行清單雖成資料，安全前提仍成立。
+MANIFEST="$SKILL_DIR/references/scan-manifest.json"
+_RO_VERBS=" list describe get get-iam-policy search-all-resources list-configs "
+_MUT_VERBS=" create delete update patch remove add set enable disable reset start stop deploy replace import restore promote rollback move clear set-iam-policy add-iam-policy-binding remove-iam-policy-binding "
+
+api_enabled() {  # $1=API 名；查已掃描的 global/services-enabled.json（本機 jq，不碰 GCP）
+  jq -e --arg a "$1" '[.[]?.config.name] | any(. == $a)' "$DATA/global/services-enabled.json" > /dev/null 2>&1
+}
+
+run_manifest_section() {  # $1=section 名；跑該 section 中所有帶 args 的條目
+  local section="$1"
+  if [ ! -s "$MANIFEST" ]; then
+    echo "錯誤：找不到掃描清單 $MANIFEST" >&2; return 1
+  fi
+  local n; n="$(jq --arg s "$section" '[.entries[]|select(.section==$s and .args)]|length' "$MANIFEST")"
+  local i=0
+  while [ "$i" -lt "$n" ]; do
+    local out api
+    IFS=$'\t' read -r out api < <(jq -r --arg s "$section" --argjson i "$i" \
+      '[.entries[]|select(.section==$s and .args)][$i] | "\(.out)\t\(.api // "")"' "$MANIFEST")
+    local args=()
+    while IFS= read -r a; do args+=("$a"); done < <(jq -r --arg s "$section" --argjson i "$i" \
+      '[.entries[]|select(.section==$s and .args)][$i].args[]' "$MANIFEST")
+    # 唯讀動詞白名單檢查（縱深防禦）
+    local ok_ro=0 bad="" tok
+    for tok in "${args[@]}"; do
+      case "$_MUT_VERBS" in *" $tok "*) bad="$tok" ;; esac
+      case "$_RO_VERBS"  in *" $tok "*) ok_ro=1 ;; esac
+    done
+    if [ -n "$bad" ]; then
+      echo "  BLOCK ${out}（manifest 含變更動詞「${bad}」，拒絕執行）" >&2
+      echo "FAILED: $out :: reason=manifest entry contains mutating verb '$bad' (blocked by read-only allowlist) :: gcloud ${args[*]}" >> "$ERRLOG"
+    elif [ "$ok_ro" -eq 0 ]; then
+      echo "  BLOCK ${out}（manifest 無唯讀動詞，拒絕執行）" >&2
+      echo "FAILED: $out :: reason=manifest entry has no read-only verb :: gcloud ${args[*]}" >> "$ERRLOG"
+    else
+      RUN_API="$api"
+      run "$out" "${args[@]}" "${P[@]}"
+    fi
+    i=$((i+1))
+  done
+}
+
 echo "=== 專案層 ==="
 run "global/services-enabled"    services list --enabled "${P[@]}"
 run "global/iam-service-accounts" iam service-accounts list "${P[@]}"
@@ -162,12 +217,7 @@ for sa in $(jq -r '.[].email // empty' "$DATA/global/iam-service-accounts.json" 
   run "global/sa-detail/$sa-keys" iam service-accounts keys list --iam-account "$sa" \
       --managed-by user "${P[@]}"
 done
-run "global/iam-custom-roles"    iam roles list --project "$PROJECT"
-run "global/org-policies"        resource-manager org-policies list --project "$PROJECT"
-# API keys（憑證面：安全支柱重點）。CAI 覆蓋檢查發現此類先前未掃。關鍵在有無「應用來源限制」
-# （browserKeyRestrictions／serverKeyRestrictions／androidKeyRestrictions／iosKeyRestrictions）與 apiTargets——
-# 無應用限制＝任何持有金鑰者可從任意來源呼叫。全域資源，不需 --location。
-run "global/api-keys"            services api-keys list "${P[@]}"
+run_manifest_section global   # iam-custom-roles／org-policies／api-keys（清單見 scan-manifest.json）
 # Cloud Asset Inventory：覆蓋率預言機。一支唯讀 API 列出專案內**跨所有服務的實際資源實例**（依 assetType），
 # 由 digest 的 coverage-check 段落 diff scan.sh 已知覆蓋清單，確定性標出「有資源卻沒掃」的缺口，
 # 每期自動抓出未來新增的服務（取代靠記憶擴充清單）。需 cloudasset API 啟用＋roles/cloudasset.viewer；
@@ -175,29 +225,12 @@ run "global/api-keys"            services api-keys list "${P[@]}"
 run "global/asset-inventory"     asset search-all-resources --scope "projects/$PROJECT"
 
 echo "=== 網路 ==="
-run "network/networks"        compute networks list "${P[@]}"
-run "network/subnets"         compute networks subnets list "${P[@]}"
-run "network/routes"          compute routes list "${P[@]}"
-run "network/firewall-rules"  compute firewall-rules list "${P[@]}"
-run "network/addresses"       compute addresses list "${P[@]}"
-run "network/routers"         compute routers list "${P[@]}"
-run "network/vpn-tunnels"     compute vpn-tunnels list "${P[@]}"
-run "network/vpn-gateways"    compute vpn-gateways list "${P[@]}"
-run "network/interconnects"   compute interconnects list "${P[@]}"
-run "network/vpc-connectors"  compute networks vpc-access connectors list --region - "${P[@]}"
+run_manifest_section network
 
 echo "=== 運算 ==="
-run "compute/instances"        compute instances list "${P[@]}"
-run "compute/instance-groups"  compute instance-groups managed list "${P[@]}"
-# ⚠️ 上一行只列出**受管**群組。負載平衡器的後端（backend-services 的 backends[].group）
-#    很常是**未受管**群組——GKE 自建的 `k8s-ig--*` 與人工建立的群組都是，兩者都不會出現在
-#    managed list 裡。少了這一行，「後端服務 → 執行個體群組」這一段流量鏈就完全查不到後端是誰
-#    （2026-07-21 實測：7 個後端服務指向的 group 沒有一個查得到）。
-run "compute/instance-groups-all" compute instance-groups list "${P[@]}"
-run "compute/instance-templates" compute instance-templates list "${P[@]}"
-run "compute/disks"            compute disks list "${P[@]}"
-run "compute/snapshots"        compute snapshots list "${P[@]}"
-run "compute/images"           compute images list --no-standard-images "${P[@]}"
+# instances／instance-groups(managed)／instance-groups-all(含未受管，LB 後端／GKE k8s-ig-* 靠它)／
+# templates／disks／snapshots／images — 清單見 scan-manifest.json
+run_manifest_section compute
 run "compute/gke-clusters"     container clusters list "${P[@]}"
 # 逐叢集 describe：list 拿不到 privateClusterConfig／masterAuthorizedNetworksConfig／
 # ipAllocationPolicy／networkConfig 等網路欄位，必須逐一 describe（比照下方 Cloud SQL 逐個 describe）。
@@ -304,15 +337,7 @@ fi
 rm -f "$AE_ERR"
 
 echo "=== 負載平衡與邊緣 ==="
-run "lb/forwarding-rules"    compute forwarding-rules list "${P[@]}"
-run "lb/backend-services"    compute backend-services list "${P[@]}"
-run "lb/url-maps"            compute url-maps list "${P[@]}"
-run "lb/target-https-proxies" compute target-https-proxies list "${P[@]}"
-run "lb/target-http-proxies"  compute target-http-proxies list "${P[@]}"
-run "lb/health-checks"       compute health-checks list "${P[@]}"
-run "lb/ssl-policies"        compute ssl-policies list "${P[@]}"
-run "lb/ssl-certificates"    compute ssl-certificates list "${P[@]}"
-run "lb/security-policies"   compute security-policies list "${P[@]}"
+run_manifest_section lb
 
 echo "=== 資料庫 ==="
 run "db/sql-instances"  sql instances list "${P[@]}"
@@ -321,33 +346,10 @@ for inst in $(jq -r '.[].name // empty' "$DATA/db/sql-instances.json" 2>/dev/nul
   run "db/sql-detail/$inst-describe" sql instances describe "$inst" "${P[@]}"
   run "db/sql-detail/$inst-backups"  sql backups list --instance "$inst" "${P[@]}"
 done
-run "db/spanner-instances"  spanner instances list "${P[@]}"
-run "db/bigtable-instances" bigtable instances list "${P[@]}"
-run "db/firestore-databases" firestore databases list "${P[@]}"
-run "db/redis-instances"    redis instances list --region - "${P[@]}"
-# Memorystore for Redis **Cluster**（與上方 Instance 是不同產品／不同 API：叢集化、分片式 Valkey/Redis）。
-# ⚠️ 歷史教訓（2026-07-24）：只掃 `redis instances list` 會漏掉 cluster——CAI 覆蓋檢查在 erp-greattree-prod
-#    抓到 2 座 cluster（含承載 session 的 erp-redis-session-prod）完全不在報告內。安全／可靠性關鍵欄位
-#    （transitEncryptionMode／authorizationMode／persistenceConfig／deletionProtectionEnabled）與 Instance 不同路徑，
-#    digest 的 redis 段落需分別解析。區域性資源，用 --region - 跨區彙整，同 Instance。
-run "db/redis-clusters"     redis clusters list --region - "${P[@]}"
-
-# Memorystore for Memcached（Memorystore 的另一個引擎，與上方 Redis 同族；區域性資源，用 --region -
-# 萬用查詢跨全部區域，同 Redis）。
-# ⚠️ 空狀態行為（2026-07-23 實測 erp-greattree-prod）：memcache.googleapis.com **未啟用**時，
-#    `memcache instances list --region -` 回**標準的** SERVICE_DISABLED（「Cloud Memorystore for
-#    Memcached API has not been used ... before or it is disabled」，reason=SERVICE_DISABLED，exit 1），
-#    這**符合** run() 的 FAILED 分類（→ digest 的 scan-gaps.md 正確歸為「資料缺口：API 未啟用」）；
-#    比照 Filestore／AlloyDB，**不是** App Engine 那種需特殊比對的錯誤訊息。API 啟用但無 instance 時
-#    回標準 `[]`（→ EMPTY／未設定）。兩種空狀態都遵循標準 gcloud 慣例，故走**標準 run()**、不需自訂空判斷。
-#    （互動式會先跳「是否啟用 API？(y/N)」提示，但本檔已設 CLOUDSDK_CORE_DISABLE_PROMPTS=1，不會卡住。）
-# ⚠️ Memcached 與 Redis 同屬 Memorystore、**無公開 IP 的概念**：只能透過綁定的 authorizedNetwork VPC
-#    以 private services access 存取。`list --format=json` 已回**完整 Instance 資源**（含 authorizedNetwork／
-#    zones／nodeCount／nodeConfig／memcacheVersion／state），比照 Redis／Filestore 不需逐一 describe。
-# ⚠️ 欄位路徑**未經真實資料驗證**（本專案 API 未啟用，list 回 SERVICE_DISABLED、迴圈實跑 0 筆）；
-#    僅依官方 Memcached REST v1 Instance schema 撰寫，digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
-run "db/memcached-instances" memcache instances list --region - "${P[@]}"
-
+# spanner／bigtable／firestore／redis-instances／redis-clusters／memcached — 清單見 scan-manifest.json
+# （redis-clusters 與 Instance 是不同產品／不同 API：manifest 的 note 記了 2026-07-24 那次漏掃教訓。
+#  各服務「API 未啟用時回應」的差異，由引擎的通用啟用預檢統一處理，不再逐服務手判。）
+run_manifest_section db
 # AlloyDB（cluster → instance 兩層結構；區域性資源，用 --region - 萬用查詢跨全部區域）
 # ⚠️ 空狀態行為（2026-07-23 實測 erp-greattree-prod）：AlloyDB API（alloydb.googleapis.com）**已啟用**、
 #    但**無任何 cluster** 時，`alloydb clusters list --region -` 回**標準空陣列** `[]`＋exit 0
@@ -481,34 +483,15 @@ else
 fi
 
 echo "=== 儲存 ==="
-# GCS 一次呼叫就含 iamConfiguration（PAP／UBLA）／versioning／lifecycle／encryption，
-# 不需要逐 bucket 分多次查詢。
-run "storage/buckets" storage buckets list "${P[@]}"
-# Filestore（受管 NFS 檔案儲存；概念上與 Cloud Storage 同屬儲存類，故放本段）。
-# ⚠️ 位置查法（2026-07-23 查證 gcloud reference）：Filestore 是區域性資源，但 `filestore instances
-#    list` 在**省略位置旗標時「uses all locations by default」**，預設就跨全部 zone／region 列出，
-#    **不需要** Redis 那種 `--region -` 萬用查詢。且 `list --format=json` 已回**完整 Instance 資源**
-#    （含 networks[]／fileShares[]／tier／state），不像 Cloud Run 要逐一 describe 才有網路欄位，
-#    故本段只需一次 list、不另開 describe 迴圈。
-# ⚠️ 為什麼可以走標準 run()（與 App Engine 不同，2026-07-23 本專案 erp-greattree-prod 實測）：
-#    本專案 file.googleapis.com 未啟用，`filestore instances list` 回**標準的** SERVICE_DISABLED
-#    （「Cloud Filestore API has not been used ... before or it is disabled」），這**符合** run() 的
-#    FAILED 分類（→ digest 的 scan-gaps.md 正確歸為「資料缺口：API 未啟用」）；API 啟用但無執行個體時
-#    gcloud 回標準 `[]`（→ EMPTY／未設定）。兩種空狀態都遵循標準 gcloud 慣例，無 App Engine 那種需要
-#    特殊比對的錯誤訊息，故直接用 run()，不必自訂空判斷。
-# ⚠️ Filestore **無公開 IP 的概念**：只能透過同 VPC／VPC Peering／Private Service Access 存取
-#    （networks[].network＝綁定的 VPC、networks[].reservedIpRange＝保留網段、connectMode＝連線模式）。
-#    欄位路徑本專案無真實資料驗證（API 未啟用），digest 對應段落已加「欄位無法解析→斷言 FAIL」防呆。
-run "storage/filestore-instances" filestore instances list "${P[@]}"
+# buckets／filestore-instances — 清單見 scan-manifest.json（GCS 一次呼叫即含 PAP/UBLA/versioning/lifecycle/CMEK）
+run_manifest_section storage
+# Filestore 無公開 IP 概念（只能經同 VPC／VPC Peering／PSA 存取，networks[].network 為綁定 VPC）；
+# list 省略位置旗標即跨全 region、且一次回完整 Instance 資源，不需 describe 迴圈——故列為標準 manifest 條目。
 
 echo "=== 維運與偵測 ==="
-run "ops/logging-sinks"      logging sinks list "${P[@]}"
-run "ops/logging-buckets"    logging buckets list --location=global "${P[@]}"
-run "ops/logging-metrics"    logging metrics list "${P[@]}"
-run "ops/monitoring-policies" alpha monitoring policies list "${P[@]}"
-run "ops/uptime-checks"      monitoring uptime list-configs "${P[@]}"
-run "ops/kms-keyrings"       kms keyrings list --location global "${P[@]}"
-run "ops/dns-zones"          dns managed-zones list "${P[@]}"
+# logging-sinks/buckets/metrics／monitoring-policies／uptime-checks／kms-keyrings(global)／dns-zones
+# 清單見 scan-manifest.json（per-region kms keyring 仍在下方 Recommender 區塊逐 region 查）
+run_manifest_section ops
 
 echo "=== 成本訊號（GCP 無可直接查詢的成本明細 API）==="
 run "cost/billing-info"    billing projects describe "$PROJECT"
