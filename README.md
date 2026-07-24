@@ -14,7 +14,8 @@
 - **並行分析**：五大支柱由五個 agent 並行分析，最後由 report-writer 彙整
 - **固定版型**：HTML 報告由確定性腳本從模板＋結構化資料產生，不經過 LLM，逐月版型完全一致
 - **敏感資訊保護**：掃描原始資料（`data/`）已列入 `.gitignore`，只留本機；
-  需要對外分享時可用 `--masked` 產生遮罩版報告
+  對外分享時先在 `report-data.json` 遮罩敏感識別碼，再用 `--masked` 做洩漏防呆檢查
+  （`--masked` 只把關、不自動遮罩：偵測到專案 ID／編號／帳單帳戶／金鑰等未遮罩即中止）
 
 ## 前置條件
 
@@ -32,7 +33,7 @@
 ```
 ① gcp-scanner（同步執行）
      執行 .claude/skills/report-gcp/scripts/scan.sh → data/**.json + data/inventory.md
-     末尾自動跑 digest.sh → data/digest/（精簡投影＋跨檔關聯事實表，含證據欄位斷言）
+     末尾自動跑 digest.sh → data/digest/（精簡投影＋跨檔關聯事實表＋覆蓋率檢查 coverage-gaps.md，含證據欄位斷言）
 ② 五個分析 agent（並行背景執行，等 ① 完成後才派工）
      security-auditor / reliability-reviewer / performance-reviewer / cost-optimizer / ops-reviewer
      各自輸出 findings/<pillar>.md
@@ -92,14 +93,15 @@ node .claude/skills/gcp-diagram/scripts/build-diagram.js   # → report/gcp-arch
 |---|---|
 | `.claude/agents/` | 七個 agent 定義 |
 | `.claude/skills/report-gcp/SKILL.md` | `/report-gcp` 一鍵無人值守流程 |
-| `.claude/skills/report-gcp/scripts/scan.sh` | 唯讀掃描腳本（末尾自動呼叫 digest.sh） |
+| `.claude/skills/report-gcp/scripts/scan.sh` | 唯讀掃描腳本（末尾自動呼叫 digest.sh）；標準服務掃描清單抽在 `references/scan-manifest.json`，由內建 manifest 引擎執行（唯讀動詞白名單＋API 啟用預檢） |
 | `.claude/skills/report-gcp/scripts/digest.sh` | 掃描資料精簡（本機 jq；含證據欄位斷言，欄位遺失即失敗） |
 | `.claude/skills/report-gcp/scripts/network-facts.py` | 跨檔關聯事實表（防火牆暴露面／VM 對外路徑／Cloud SQL 可及性） |
+| `.claude/skills/report-gcp/scripts/coverage-check.sh` | 覆蓋率檢查（純諮詢）：Cloud Asset Inventory diff `scan-manifest.json`，標出「有資源卻沒掃」的缺口 → `data/digest/coverage-gaps.md` |
 | `.claude/skills/report-gcp/scripts/check-links.sh` | 官方文件連結有效性檢查 |
 | `.claude/skills/report-gcp/scripts/archive-report.sh` | 存檔本期報告到 archive/<期別>/ |
 | `.claude/skills/report-gcp/scripts/build-report.js` | 確定性 HTML 報告產生器（模板＋資料填充，不經過 LLM） |
 | `.claude/skills/report-gcp/scripts/pricing-lookup.sh` | 直查 Cloud Billing Catalog API 取官方牌價（美金），cost-optimizer 用來取代 WebFetch 定價頁 |
-| `.claude/skills/report-gcp/references/` | 已驗證的官方文件連結目錄（依支柱拆分，agent 只讀自己那份）；另含 `pricing-service-ids.json`（定價查詢用的服務代碼對照表，目前不進版控，見 `.gitignore`） |
+| `.claude/skills/report-gcp/references/` | 已驗證的官方文件連結目錄（依支柱拆分，agent 只讀自己那份）；另含 `scan-manifest.json`（掃描清單＋覆蓋宣告，單一真相來源）與 `pricing-service-ids.json`（定價查詢用服務代碼對照表，目前不進版控，見 `.gitignore`） |
 | `.claude/skills/report-gcp/templates/` | 發現格式、HTML 模板、主題、report-data 規格與範例 |
 | `.claude/skills/gcp-diagram/` | 選配：draw.io 架構圖產生器（不在無人值守流程內） |
 | `data/` | 掃描原始資料（gitignore，只留本機） |
@@ -146,5 +148,6 @@ node .claude/skills/gcp-diagram/scripts/build-diagram.js   # → report/gcp-arch
 - `data/` 含專案內部資訊，**不得提交或外傳**；`tmp/`（暫存檔）同樣**內容完全不得提交**
   ——兩者的 `.gitignore` 都是 `*` ＋ `!.gitignore`，含巢狀目錄與隱藏檔都涵蓋，
   但**擋不住 `git add -f`**，不要對這兩個目錄用 `-f`
-- 報告預設不遮罩（正式上線用途）；對外分享前用 `build-report.js --masked` 產生遮罩版並通過防呆檢查
+- 報告預設不遮罩（正式上線用途）；對外分享前先在 `report-data.json` 遮罩敏感識別碼，
+  再用 `build-report.js --masked` 做洩漏防呆檢查（它把關、不自動遮罩，未遮乾淨即中止並指出洩漏處）
 - 憑證失效時請自行更新（`gcloud auth login`），agent 不會代為處理憑證
