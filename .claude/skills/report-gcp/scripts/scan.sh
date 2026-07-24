@@ -164,6 +164,15 @@ for sa in $(jq -r '.[].email // empty' "$DATA/global/iam-service-accounts.json" 
 done
 run "global/iam-custom-roles"    iam roles list --project "$PROJECT"
 run "global/org-policies"        resource-manager org-policies list --project "$PROJECT"
+# API keys（憑證面：安全支柱重點）。CAI 覆蓋檢查發現此類先前未掃。關鍵在有無「應用來源限制」
+# （browserKeyRestrictions／serverKeyRestrictions／androidKeyRestrictions／iosKeyRestrictions）與 apiTargets——
+# 無應用限制＝任何持有金鑰者可從任意來源呼叫。全域資源，不需 --location。
+run "global/api-keys"            services api-keys list "${P[@]}"
+# Cloud Asset Inventory：覆蓋率預言機。一支唯讀 API 列出專案內**跨所有服務的實際資源實例**（依 assetType），
+# 由 digest 的 coverage-check 段落 diff scan.sh 已知覆蓋清單，確定性標出「有資源卻沒掃」的缺口，
+# 每期自動抓出未來新增的服務（取代靠記憶擴充清單）。需 cloudasset API 啟用＋roles/cloudasset.viewer；
+# 未啟用時 run() 歸資料缺口（不影響其餘掃描）。--scope 用 projects/<id>，非 --project。
+run "global/asset-inventory"     asset search-all-resources --scope "projects/$PROJECT"
 
 echo "=== 網路 ==="
 run "network/networks"        compute networks list "${P[@]}"
@@ -316,6 +325,12 @@ run "db/spanner-instances"  spanner instances list "${P[@]}"
 run "db/bigtable-instances" bigtable instances list "${P[@]}"
 run "db/firestore-databases" firestore databases list "${P[@]}"
 run "db/redis-instances"    redis instances list --region - "${P[@]}"
+# Memorystore for Redis **Cluster**（與上方 Instance 是不同產品／不同 API：叢集化、分片式 Valkey/Redis）。
+# ⚠️ 歷史教訓（2026-07-24）：只掃 `redis instances list` 會漏掉 cluster——CAI 覆蓋檢查在 erp-greattree-prod
+#    抓到 2 座 cluster（含承載 session 的 erp-redis-session-prod）完全不在報告內。安全／可靠性關鍵欄位
+#    （transitEncryptionMode／authorizationMode／persistenceConfig／deletionProtectionEnabled）與 Instance 不同路徑，
+#    digest 的 redis 段落需分別解析。區域性資源，用 --region - 跨區彙整，同 Instance。
+run "db/redis-clusters"     redis clusters list --region - "${P[@]}"
 
 # Memorystore for Memcached（Memorystore 的另一個引擎，與上方 Redis 同族；區域性資源，用 --region -
 # 萬用查詢跨全部區域，同 Redis）。
