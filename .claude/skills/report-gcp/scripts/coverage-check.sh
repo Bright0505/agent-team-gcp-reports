@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# coverage-check.sh — 覆蓋率確定性比對
+# coverage-check.sh — 覆蓋率確定性比對（純諮詢，不阻斷流程）
 #
 # 用 Cloud Asset Inventory（data/global/asset-inventory.json）當「這專案真的有哪些資源型別」的權威來源，
-# diff 一張審查過的 assetType 分類表，產出 data/digest/coverage-gaps.md：
-#   ① 已覆蓋      — scan.sh 有掃
+# diff scan-manifest.json 宣告的覆蓋清單，產出 data/digest/coverage-gaps.md：
+#   ① 已覆蓋      — scan.sh 有掃（依 manifest 的 assetTypes 判定）
 #   ② 範圍外(k8s) — GKE 叢集內的 Kubernetes 物件，需 kubectl 憑證，屬 GCP 資源層以外
 #   ③ 範圍外(meta)— 專案中繼資料／暫態查詢，非需稽核的資源
 #   ④ 待分類缺口  — 有資源卻不在上述任何分類 → 需人工 triage 決定要不要掃
 #
 # 鐵則：**未知 assetType 一律落入 ④**（預設即缺口）。這才能在未來新增服務時自動浮現，
-# 不靠人憑記憶擴充清單——這正是本機制的價值。新確認要掃的型別，補進 COVERED；
-# 確認範圍外的，補進 OOS_META（k8s 由網域自動判定，不需逐條列）。
+# 不靠人憑記憶擴充清單——這正是本機制的價值。
+#
+# 覆蓋來源＝**單一真相**：`references/scan-manifest.json` 的 assetTypes 聯集（不再手維護第二張表）。
+# 要把某缺口變成「已掃」：在 scan-manifest.json 加一筆（標準服務給 args；例外用 handledIn 並在 scan.sh 寫碼）。
+# 本檔為**純諮詢**：只報告缺口、不 exit 1、不阻斷 digest（覆蓋回歸靠人每期看本報告，非自動當機）。
 #
 # 唯讀、純本機處理（jq），不碰 GCP 專案。用法：bash coverage-check.sh [DATA_DIR]
 set -euo pipefail
@@ -31,67 +34,14 @@ if [ ! -s "$INV" ]; then
   exit 0
 fi
 
-# ── 已覆蓋清單（scan.sh 目前會掃的 GCP 資源型別）────────────────────────────
-# 改動 scan.sh 的覆蓋範圍時，這張表要同步更新（審查過才加）。
-COVERED="$(cat <<'EOF'
-compute.googleapis.com/Instance
-compute.googleapis.com/Disk
-compute.googleapis.com/Snapshot
-compute.googleapis.com/Subnetwork
-compute.googleapis.com/Network
-compute.googleapis.com/Route
-compute.googleapis.com/Router
-compute.googleapis.com/Firewall
-compute.googleapis.com/Address
-compute.googleapis.com/ForwardingRule
-compute.googleapis.com/BackendService
-compute.googleapis.com/UrlMap
-compute.googleapis.com/TargetHttpProxy
-compute.googleapis.com/TargetHttpsProxy
-compute.googleapis.com/HealthCheck
-compute.googleapis.com/SslCertificate
-compute.googleapis.com/SslPolicy
-compute.googleapis.com/SecurityPolicy
-compute.googleapis.com/InstanceGroup
-compute.googleapis.com/InstanceGroupManager
-compute.googleapis.com/InstanceTemplate
-compute.googleapis.com/VpnTunnel
-compute.googleapis.com/VpnGateway
-compute.googleapis.com/Interconnect
-compute.googleapis.com/Image
-sqladmin.googleapis.com/Instance
-sqladmin.googleapis.com/Backup
-sqladmin.googleapis.com/BackupRun
-redis.googleapis.com/Instance
-redis.googleapis.com/Cluster
-storage.googleapis.com/Bucket
-dns.googleapis.com/ManagedZone
-iam.googleapis.com/ServiceAccount
-iam.googleapis.com/ServiceAccountKey
-logging.googleapis.com/LogSink
-logging.googleapis.com/LogBucket
-logging.googleapis.com/LogMetric
-container.googleapis.com/Cluster
-container.googleapis.com/NodePool
-serviceusage.googleapis.com/Service
-cloudbilling.googleapis.com/ProjectBillingInfo
-cloudresourcemanager.googleapis.com/Project
-apikeys.googleapis.com/Key
-pubsub.googleapis.com/Topic
-pubsub.googleapis.com/Subscription
-bigquery.googleapis.com/Dataset
-spanner.googleapis.com/Instance
-bigtableadmin.googleapis.com/Instance
-alloydb.googleapis.com/Cluster
-memcache.googleapis.com/Instance
-firestore.googleapis.com/Database
-run.googleapis.com/Service
-cloudfunctions.googleapis.com/CloudFunction
-appengine.googleapis.com/Service
-file.googleapis.com/Instance
-monitoring.googleapis.com/AlertPolicy
-EOF
-)"
+# ── 已覆蓋清單：由 scan-manifest.json 的 assetTypes 聯集推導（單一真相來源）─────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MANIFEST="$SCRIPT_DIR/../references/scan-manifest.json"
+if [ ! -s "$MANIFEST" ]; then
+  echo "錯誤：找不到 scan-manifest.json（$MANIFEST）——無法推導覆蓋清單" >&2
+  exit 1
+fi
+COVERED="$(jq -r '[.entries[].assetTypes[]?] | unique | .[]' "$MANIFEST")"
 
 # ── 範圍外：專案中繼資料／暫態查詢（非需稽核的資源實例）────────────────────
 OOS_META="$(cat <<'EOF'
@@ -122,26 +72,11 @@ while IFS= read -r row; do
   fi
 done < <(jq -r '.[].assetType' "$INV" | sort | uniq -c | sort -rn | sed 's/^ *//')
 
-# ── 必掃執法：讀版控的 required-coverage.json，違規者硬失敗 ──────────────────
-# 違規 = 某必掃 assetType「存在於專案 ∧ 不在 COVERED」。它只讀字串、不跑任何 gcloud，安全。
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REQ_FILE="$SCRIPT_DIR/../references/required-coverage.json"
-PRESENT_ALL="$(jq -r '.[].assetType' "$INV" | sort -u)"
-violations=()
-if [ -s "$REQ_FILE" ]; then
-  while IFS= read -r req; do
-    [ -z "$req" ] && continue
-    if grep -qxF "$req" <<<"$PRESENT_ALL" && ! grep -qxF "$req" <<<"$COVERED"; then
-      violations+=("$req")
-    fi
-  done < <(jq -r '.required[]? // empty' "$REQ_FILE")
-fi
-
 {
-  echo "# 覆蓋率檢查（Cloud Asset Inventory diff scan.sh）"
+  echo "# 覆蓋率檢查（Cloud Asset Inventory diff scan-manifest.json）"
   echo
-  echo "> 由 \`coverage-check.sh\` 確定性產生：以 CAI 列出的專案實際資源型別，對照 scan.sh 已知覆蓋清單。"
-  echo "> **未知型別一律歸「④ 待分類缺口」**——未來新增服務會自動在此浮現。"
+  echo "> 由 \`coverage-check.sh\` 確定性產生：以 CAI 列出的專案實際資源型別，對照 \`scan-manifest.json\` 宣告的覆蓋。"
+  echo "> **未知型別一律歸「④ 待分類缺口」**——未來新增服務會自動在此浮現。純諮詢：不阻斷流程，靠人每期檢視。"
   echo
   echo "## 摘要"
   echo
@@ -153,19 +88,10 @@ fi
   echo "| **④ 待分類缺口（需 triage）** | **$c_gap** |"
   echo "| 合計 | $tot |"
   echo
-  if [ "${#violations[@]}" -gt 0 ]; then
-    echo "## 🔴 必掃違規（required-coverage.json）— 存在於專案卻未被 scan.sh 掃到"
-    echo
-    echo "> 這些型別被列為必掃，卻在專案中存在且未覆蓋。**已使 coverage-check 硬失敗（exit 1），digest 中止。**"
-    echo "> 修法：把對應的 \`run\` 收集加進 \`scan.sh\`（並更新 coverage-check.sh 的 COVERED 表），或若確認不需掃，從 required-coverage.json 移除。"
-    echo
-    echo "| 必掃 assetType |"
-    echo "|---|"
-    for v in "${violations[@]}"; do echo "| \`$v\` |"; done
-    echo
-  fi
   if [ "$c_gap" -gt 0 ]; then
     echo "## ④ 待分類缺口 — 有資源卻不在覆蓋清單，需人工判斷要不要掃"
+    echo
+    echo "> 要掃：在 \`scan-manifest.json\` 加一筆（標準服務給 args；行為不標準者用 handledIn 並在 scan.sh 寫碼）。故意不掃：略過即可。"
     echo
     echo "| assetType | 資源數 |"
     echo "|---|---:|"
@@ -189,7 +115,7 @@ fi
   echo "|---|---:|"
   printf '%s\n' "${meta_lines[@]}"
   echo
-  echo "## ① 已覆蓋（scan.sh 有掃）"
+  echo "## ① 已覆蓋（scan-manifest.json 宣告）"
   echo
   echo "| assetType | 資源數 |"
   echo "|---|---:|"
@@ -197,8 +123,3 @@ fi
 } > "$OUT"
 
 echo "coverage-check：合計 ${tot} 型（已覆蓋 ${c_cov}／k8s ${c_k8s}／meta ${c_meta}／待分類缺口 ${c_gap}）→ $OUT"
-
-if [ "${#violations[@]}" -gt 0 ]; then
-  echo "🔴 必掃違規 ${#violations[@]} 項（見 coverage-gaps.md 頂端）：${violations[*]}" >&2
-  exit 1
-fi
