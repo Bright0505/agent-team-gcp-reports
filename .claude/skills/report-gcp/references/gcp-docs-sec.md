@@ -31,6 +31,7 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access)
 - [VPC Service Controls overview](https://docs.cloud.google.com/vpc-service-controls/docs/overview)
 - [Memorystore for Memcached networking（authorizedNetwork VPC 綁定／private services access，無公開 IP、無 IAM 驗證）](https://docs.cloud.google.com/memorystore/docs/memcached/networking)
+- [About IAM authentication (Memorystore for Redis Cluster)（authorizationMode／AUTH_MODE_DISABLED＝無驗證存取）](https://docs.cloud.google.com/memorystore/docs/cluster/about-iam-auth)
 
 ## 無伺服器網路安全性（Cloud Run）
 
@@ -106,6 +107,11 @@ security-auditor 專用。使用規則見 `gcp-docs-common.md`。
 - [Use private services access endpoints for online inference（`network` VPC peering 私有化）](https://docs.cloud.google.com/vertex-ai/docs/predictions/using-private-endpoints)
 - [About accessing Vertex AI through Private Service Connect endpoints（`privateServiceConnectConfig` PSC 私有化）](https://docs.cloud.google.com/vertex-ai/docs/general/psc-endpoints)
 - [Customer-managed encryption keys for Vertex AI（CMEK：encryptionSpec.kmsKeyName）](https://docs.cloud.google.com/vertex-ai/docs/general/cmek)
+
+## API 金鑰
+
+- [Adding restrictions to API keys（應用來源限制 browser／server／android／ios＋API 限制）](https://docs.cloud.google.com/api-keys/docs/add-restrictions-api-keys)
+- [Manage API keys（API 金鑰的建立、限制與輪替）](https://docs.cloud.google.com/docs/authentication/api-keys)
 
 ## 稽核
 
