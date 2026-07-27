@@ -34,3 +34,7 @@ ops-reviewer 專用。使用規則見 `gcp-docs-common.md`。
 
 - [Cloud SQL maintenance](https://docs.cloud.google.com/sql/docs/mysql/maintenance)
 - [GKE cluster upgrades](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-upgrades)
+
+## 服務帳戶治理
+
+- [Best practices for using service accounts securely](https://docs.cloud.google.com/iam/docs/best-practices-service-accounts)

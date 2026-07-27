@@ -32,7 +32,15 @@ if [ ! -d "$WORK_ROOT/.claude/skills/report-gcp" ]; then
 fi
 DATA="$WORK_ROOT/data"
 ERRLOG="$DATA/scan-errors.log"
+# 跨專案／跨期殘留防治（換專案測試時發現的教訓）：一次 scan ＝ 當期完整快照，開頭先清空 data/。
+# 否則換專案掃描、或某資源類型在本期消失時，前次的 per-instance／detail／digest 檔會殘留並污染
+# 本期報告——實測換掃另一個專案時，前一專案的 gke-detail／sql-detail／recommender 殘留，害 3 支分析 agent
+# 各自誤判（含把「查詢失敗」誤成「查詢成功無建議」的相反結論）。data/ 是可重掃工作區、歸檔在
+# archive/，清空安全；這也讓「換專案前需手動 rm -rf data/」自動化。
+rm -rf "$DATA"
 mkdir -p "$DATA"
+# 重建 data/ 的 .gitignore 守衛（rm -rf 會連它一起刪；它讓 data/ 內容不進版控）。
+printf '*\n!.gitignore\n' > "$DATA/.gitignore"
 : > "$ERRLOG"
 
 # ── 報告期別（嚴格週期；預設「上一個完整月」）────────────────────────────

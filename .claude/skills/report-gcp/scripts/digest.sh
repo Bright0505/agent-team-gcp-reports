@@ -136,8 +136,11 @@ fi
 # ⚠️ networkInterfaces（Direct VPC egress）也必須雙路（2026-07 實測教訓）：先前只讀 v2 的
 #    `.template.vpcAccess.networkInterfaces`，漏了 v1 Knative annotation `run.googleapis.com/network-interfaces`
 #    （JSON 字串，需 fromjson）——導致「Sending traffic directly to the VPC」的服務被誤畫成「不屬於任何 VPC」。
-#    connector／egress 早有 v1 fallback，networkInterfaces 當時漏補，本次補上（兩種形狀皆已用合成資料驗證）。
-#    annotation key 依官方文件與 Console 佐證；若日後某專案 v1 raw JSON 的 key 不同，會回退成空→仍需核對。
+#    connector／egress 早有 v1 fallback，networkInterfaces 當時漏補，本次補上（雙路吃 v1／v2）。
+#    ✅ 已用真實資料驗證（以一個 Direct VPC egress 的 Cloud Run 服務實測）：gcloud run describe 回 v1 Knative
+#    （頂層 apiVersion/kind/metadata/spec/status，無 .template.vpcAccess），Direct VPC egress 實際落在
+#    annotation `run.googleapis.com/network-interfaces`，值為 JSON 字串（如 [{"network":"default","subnetwork":"default"}]），
+#    故需 fromjson。key 與值形狀與此 fallback 完全相符。
 # ⚠️ ingress **必須正規化成單一 v2 詞彙**：v1 Knative annotation 的值是小寫短詞
 #    （"all"／"internal"／"internal-and-cloud-load-balancing"），但下游 network-facts.py 與
 #    build-diagram.js 只認 v2 enum（INGRESS_TRAFFIC_ALL 等）。不正規化的話，v1 風格、對外開放

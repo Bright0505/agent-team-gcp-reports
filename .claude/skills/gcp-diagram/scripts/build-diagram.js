@@ -563,6 +563,27 @@ function loadModel() {
     return { name, kind: 'Cloud Run', ingress: dg.ingress || null, connector, directNets, via, vpc };
   });
 
+  // Cloud Functions 的 VPC 出口：清單層級（compute/functions.json）沒有 vpcConnector，改讀
+  // digest/functions.json（scan.sh 逐函式 describe → digest.sh 投影）。與 Cloud Run 對稱：
+  // vpcConnector 非空＝走 Serverless VPC connector、反查綁定網路；否則才是真正「不屬於任何 VPC」。
+  // （先前這裡硬編 via:null，即使函式掛了 connector 也誤標「不屬於任何 VPC」——同 Cloud Run 舊 bug 一類，
+  //  於某測試專案稽核圖時發現：該專案 24 個函式雖恰好都無 connector、輸出碰巧正確，但程式路徑是錯的。）
+  const fnsDigest = readJsonMaybe(DATA('digest', 'functions.json')) || [];
+  const fnsByName = new Map(fnsDigest.map((fn) => [fn.name, fn]));
+  const functions = fnsRaw.map((s) => {
+    const name = last(s.name) || s.name || '?';
+    const dg = fnsByName.get(name) || fnsByName.get(s.name) || {};
+    const connector = dg.vpcConnector ? last(dg.vpcConnector) : null;
+    let via = null;
+    let vpc = null;
+    if (connector) {
+      via = 'connector';
+      const c = vpcConnectors.find((x) => last(x.name) === connector);
+      vpc = c ? last(c.network) : null;
+    }
+    return { name, kind: 'Cloud Functions', ingress: dg.ingress || null, connector, via, vpc };
+  });
+
   // ---- VPC 網路：把上面所有東西掛到各自的網路上 ----
   const networks = networksRaw
     .map((n) => {
@@ -650,7 +671,7 @@ function loadModel() {
     buckets,
     addresses,
     runs,
-    functions: fnsRaw,
+    functions,
     governance,
     denyRules,
     vmToSql,
@@ -1093,7 +1114,7 @@ function buildSummary(model, sd) {
     // connector 必須一起帶：下方 route fallback（via==='connector' 時）會讀 s.connector 顯示
     // 「connector <名>」，漏帶會讓反查不到綁定網路的服務標籤顯示「connector ?」。
     ...model.runs.map((s) => ({ name: s.name, kind: 'Cloud Run', via: s.via, vpc: s.vpc, ingress: s.ingress, connector: s.connector })),
-    ...model.functions.map((s) => ({ name: last(s.name) || '?', kind: 'Cloud Functions', via: null, vpc: null, connector: null })),
+    ...model.functions.map((s) => ({ name: s.name, kind: 'Cloud Functions', via: s.via, vpc: s.vpc, ingress: s.ingress, connector: s.connector })),
   ];
   const sideH =
     46 +
