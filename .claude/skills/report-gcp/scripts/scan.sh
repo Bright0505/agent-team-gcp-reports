@@ -291,7 +291,7 @@ done < <(jq -r '.[] | (.name // empty) as $n | ($n | split("/")) as $p | [$n, (i
 #     `network.{name,subnetworkName,instanceTag}`、`env`（standard／flexible）、`inboundServices[]`
 #     → `app versions describe <VER> --service <SVC>`
 # 故流程＝describe app → list services →（逐服務 describe 拿 ingress）→ list versions →（逐版本 describe 拿網路）。
-# ⚠️ 為什麼不用 run()（2026-07-23 本專案 erp-greattree-prod 實測）：對「未建立 App Engine 應用」的專案，
+# ⚠️ 為什麼不用 run()（2026-07-23 本專案實測）：對「未建立 App Engine 應用」的專案，
 #    `gcloud app describe` 回 **exit 1** ＋訊息「does not contain an App Engine application」。此訊息不符
 #    scan-gaps.md 的 NOT_FOUND 樣式，若走 run() 會被歸為 FAILED（資料缺口）——但這其實是「未設定／
 #    無此類資源」（有效證據），兩者結論相反、違反本專案鐵則。故本段自訂空判斷：偵測該訊息記為 EMPTY，
@@ -359,7 +359,7 @@ done
 #  各服務「API 未啟用時回應」的差異，由引擎的通用啟用預檢統一處理，不再逐服務手判。）
 run_manifest_section db
 # AlloyDB（cluster → instance 兩層結構；區域性資源，用 --region - 萬用查詢跨全部區域）
-# ⚠️ 空狀態行為（2026-07-23 實測 erp-greattree-prod）：AlloyDB API（alloydb.googleapis.com）**已啟用**、
+# ⚠️ 空狀態行為（2026-07-23 實測）：AlloyDB API（alloydb.googleapis.com）**已啟用**、
 #    但**無任何 cluster** 時，`alloydb clusters list --region -` 回**標準空陣列** `[]`＋exit 0
 #    （不是 App Engine 那種特殊訊息，也不是 Filestore 的 SERVICE_DISABLED）。故走**標準 run()**，
 #    EMPTY 分類正確、不需自訂空判斷（比照 BigQuery：API 已啟用但無資源＝有效證據，非資料缺口）。
@@ -427,7 +427,7 @@ rm -f "$BQ_ERR"
 
 echo "=== 訊息與事件（Pub/Sub）==="
 # Pub/Sub 是**全域資源**（不像 Cloud Run／Redis／AlloyDB 有區域性），list **不需要** --region -。
-# ⚠️ 空狀態行為（2026-07-23 實測 erp-greattree-prod）：pubsub.googleapis.com **已啟用**、但無任何
+# ⚠️ 空狀態行為（2026-07-23 實測）：pubsub.googleapis.com **已啟用**、但無任何
 #    topic／subscription 時，`pubsub topics list`／`subscriptions list` 回**標準空陣列** `[]`＋exit 0
 #    （與 AlloyDB／BigQuery 同情形＝有效證據，非資料缺口）。故走**標準 run()**、EMPTY 分類正確、
 #    不需 App Engine／BigQuery 那種自訂空判斷。（Pub/Sub 常為預設啟用，本專案即已啟用但未建立任何資源。）
@@ -460,7 +460,7 @@ echo "=== 資料處理（Dataflow）==="
 # Dataflow job 是**有生命週期的執行實體**（不像 topic／instance 是長存資源）：`dataflow jobs list` 回的是
 # **掃描當下的即時快照**（預設彙整各區域的 active 與近期 job），**非期別內的歷史 job 全集**——已清除的
 # 舊 batch job 不會出現。此與本專案「期別＝已結束週期的快照」精神一致，但 digest 會註明是即時狀態、非期別歷史。
-# ⚠️ 空狀態的**特殊坑**（2026-07-24 本專案 erp-greattree-prod 實測，與 Filestore／Memcached **相反**）：
+# ⚠️ 空狀態的**特殊坑**（2026-07-24 本專案實測，與 Filestore／Memcached **相反**）：
 #    `gcloud dataflow jobs list` 在 **dataflow.googleapis.com 未啟用時仍回標準空陣列 `[]`＋exit 0**
 #    （不是 Filestore／Memcached 的 SERVICE_DISABLED，也不是 App Engine 的特殊訊息）。若直接走 run()，
 #    API 未啟用會被誤歸成 EMPTY（「未設定／無資源」）——這是**相反的結論**（實為資料缺口：API 未啟用），
@@ -572,7 +572,7 @@ done < "$DATA/active-regions.txt"
 # ── 資料處理（Dataproc）───────────────────────────────────────────────
 # Dataproc（受管 Hadoop／Spark）叢集是**區域性**資源。放在此處而非上方「=== 資料處理（Dataflow）===」，
 # 是因為它需要**逐一具體 region 查詢**，得先有 active-regions.txt（在上方 Recommender 前置才算出）。
-# ⚠️ 位置查法（2026-07-24 本專案 erp-greattree-prod 實測）：`dataproc clusters list` **不支援 `--region -`**
+# ⚠️ 位置查法（2026-07-24 本專案實測）：`dataproc clusters list` **不支援 `--region -`**
 #    （會回 `Permission denied on 'locations/-'`），必須帶具體 region，故逐一 active region 查。
 # ⚠️ 空狀態（與 Dataflow **不同**、與 Filestore／Memcached **相同**）：帶具體 region 時，API 未啟用回**標準的**
 #    SERVICE_DISABLED（「Cloud Dataproc API has not been used ... or it is disabled」，exit≠0）——**沒有** Dataflow
@@ -605,7 +605,7 @@ fi
 # 聚焦**單一核心安全面：Vertex AI Endpoint 的對外暴露**——模型推論端點若對公網開放＝資料與模型外洩面，
 # 是本服務最大的安全風險點。**不納入** featurestore／pipeline／training job／Workbench（超出「網路暴露面」主軸）。
 # 放此處（active-regions.txt 算出後）而非上方資料處理段，因它需要逐一具體 region 查（同 Dataproc）。
-# ⚠️ 位置查法（2026-07-24 本專案 erp-greattree-prod 實測）：Vertex AI Endpoint 是**區域性**資源，且
+# ⚠️ 位置查法（2026-07-24 本專案實測）：Vertex AI Endpoint 是**區域性**資源，且
 #    `ai endpoints list` **不支援 `--region -`**（會被當成 endpoint override → `https://--aiplatform.googleapis.com/`
 #    無效 URI 而報錯，同 Cloud Run／Dataproc）。故逐一 active region 查。
 # ⚠️ 空狀態（2026-07-24 實測，與 Dataproc／Filestore **相同**、與 Dataflow 陷阱 **相反**）：aiplatform.googleapis.com
