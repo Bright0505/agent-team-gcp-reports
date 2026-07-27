@@ -95,7 +95,7 @@ done < <(jq -r '.[].assetType' "$INV" | sort | uniq -c | sort -rn | sed 's/^ *//
     echo
     echo "| assetType | 資源數 |"
     echo "|---|---:|"
-    printf '%s\n' "${gap_lines[@]}"
+    [ ${#gap_lines[@]} -gt 0 ] && printf '%s\n' "${gap_lines[@]}"
     echo
   else
     echo "## ④ 待分類缺口"
@@ -107,19 +107,19 @@ done < <(jq -r '.[].assetType' "$INV" | sort | uniq -c | sort -rn | sed 's/^ *//
   echo
   echo "| assetType | 資源數 |"
   echo "|---|---:|"
-  printf '%s\n' "${k8s_lines[@]}"
+  [ ${#k8s_lines[@]} -gt 0 ] && printf '%s\n' "${k8s_lines[@]}"
   echo
   echo "## ③ 範圍外：專案中繼資料／暫態查詢"
   echo
   echo "| assetType | 資源數 |"
   echo "|---|---:|"
-  printf '%s\n' "${meta_lines[@]}"
+  [ ${#meta_lines[@]} -gt 0 ] && printf '%s\n' "${meta_lines[@]}"
   echo
   echo "## ① 已覆蓋（scan-manifest.json 宣告）"
   echo
   echo "| assetType | 資源數 |"
   echo "|---|---:|"
-  printf '%s\n' "${covered_lines[@]}"
+  [ ${#covered_lines[@]} -gt 0 ] && printf '%s\n' "${covered_lines[@]}"
 } > "$OUT"
 
 echo "coverage-check：合計 ${tot} 型（已覆蓋 ${c_cov}／k8s ${c_k8s}／meta ${c_meta}／待分類缺口 ${c_gap}）→ $OUT"
